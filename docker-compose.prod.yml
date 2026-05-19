@@ -45,9 +45,11 @@ services:
       # entrypoint. See deploy/caddy/entrypoint note in README.
     secrets:
       - cf_api_token
-    ports:
-      # Override base mapping. Only :8443 is exposed; nginx-101 forwards
-      # camhub.* SNI traffic to this LXC on 8443.
+    # !override replaces the base file's port list instead of appending
+    # to it. Without this the base's "80:80" + "443:443" stay published
+    # alongside 8443, colliding with RDOC-WEBRTC's Caddy on the same LXC.
+    # Requires Compose 2.24+ (Jan 2024).
+    ports: !override
       - "8443:8443"
     volumes:
       - ./deploy/Caddyfile.prod:/etc/caddy/Caddyfile:ro

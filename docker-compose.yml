@@ -35,8 +35,20 @@ services:
       # Local dev runs Caddy on plain HTTP. Flip this off when Caddy.prod.
       CAMHUB_DEV_INSECURE_COOKIE: "1"
     secrets:
-      - db_url
-      - session_key
+      # Long-form so Docker re-chowns the mounted file to the camhub
+      # container's nonroot uid (65532, from deploy/Dockerfile). Short-form
+      # would preserve the host owner (root) + 0600 perms and the binary
+      # would fail with EACCES at startup.
+      - source: db_url
+        target: db_url
+        uid: "65532"
+        gid: "65532"
+        mode: 0400
+      - source: session_key
+        target: session_key
+        uid: "65532"
+        gid: "65532"
+        mode: 0400
     ports:
       - "127.0.0.1:8080:8080"
 

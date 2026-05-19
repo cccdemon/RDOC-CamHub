@@ -27,7 +27,6 @@ services:
     environment:
       CAMHUB_LISTEN: ":8080"
       CAMHUB_DB_URL_FILE: /run/secrets/db_url
-      CAMHUB_SESSION_KEY_FILE: /run/secrets/session_key
       CAMHUB_LOG_LEVEL: info
       # Caddy is the immediate peer. Trust Docker's default bridge ranges so
       # X-Forwarded-For from Caddy is honored. Tighten in prod.
@@ -39,7 +38,6 @@ services:
       # honored in Swarm). camhub runs as uid 65532; the host file must
       # be readable by that uid. `make secrets-init` chowns it accordingly.
       - db_url
-      - session_key
     ports:
       - "127.0.0.1:8080:8080"
 
@@ -66,5 +64,3 @@ secrets:
     file: ./secrets/postgres_password
   db_url:
     file: ./secrets/db_url
-  session_key:
-    file: ./secrets/session_key

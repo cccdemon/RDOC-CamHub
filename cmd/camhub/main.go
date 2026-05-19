@@ -105,6 +105,35 @@ func runServe(args []string) error {
 		"login_rate_window_secs", cfg.LoginRateLimitWindowSecs,
 	)
 
+	// Background session purge (PR-S5). RequireSession enforces expires_at
+	// on every request, so a missed cycle is harmless — this just keeps the
+	// table from growing unbounded. One immediate pass at startup so a
+	// just-restarted hub clears any rows the previous instance would have
+	// purged shortly.
+	go func() {
+		store := db.NewSessionStore(pool)
+		runPurge := func() {
+			n, err := store.PurgeExpired(ctx)
+			switch {
+			case err != nil:
+				logger.Warn("session purge failed", "err", err)
+			case n > 0:
+				logger.Info("session purge", "removed", n)
+			}
+		}
+		runPurge()
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				runPurge()
+			}
+		}
+	}()
+
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Router(),

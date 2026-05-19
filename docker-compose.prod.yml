@@ -18,7 +18,6 @@ services:
     environment:
       CAMHUB_LISTEN: ":8080"
       CAMHUB_DB_URL_FILE: /run/secrets/db_url
-      CAMHUB_SESSION_KEY_FILE: /run/secrets/session_key
       CAMHUB_LOG_LEVEL: info
 
       # Caddy is the only peer that can reach camhub on the compose network.

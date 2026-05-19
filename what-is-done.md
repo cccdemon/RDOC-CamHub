@@ -105,6 +105,23 @@ Source: [Securityfindings.md](Securityfindings.md), tracked as PR-S1..PR-S7 in [
 - [internal/httpapi/router.go](internal/httpapi/router.go) — router restructured into three explicit chi `Group`s: **public** (`/healthz`, `/v1/auth/login`, `/v1/auth/logout`), **authenticated** (`/v1/auth/me`, mounts `RequireSession`), **admin** (declared but empty in PR-S3; future endpoints land here). Logout stays public deliberately — `SameSite=Lax` defangs cross-site forced logout, and stale-cookie holders can clear state cleanly. `SessionWriter` interface gained `GetActiveWithUser`.
 - [internal/httpapi/auth.go](internal/httpapi/auth.go) — `/me` collapsed from 30 lines (cookie read + Sessions.Get + expiry check + Pool.QueryRow for role) to ~8 lines: it just reads `PrincipalFrom(ctx)`. All session/role logic lives in middleware.
 
+### ✅ PR-S5 — Session model & lifecycle (SEC-005, SEC-009)
+
+Resolved Plan §15 Q8 (Option A: keep random session id, drop `SessionKey`) and Q9 (Option A: 15 min access cookie + 7 d rotating refresh window). Ships rotation, hard-cap enforcement, and background purge.
+
+- [internal/auth/session.go](internal/auth/session.go) — split the lone `SessionTTL` into `SessionAccessTTL = 15 * time.Minute` (cookie + server-side `expires_at` window) and `SessionRefreshWindow = 7 * 24 * time.Hour` (hard cap measured from `created_at`).
+- [internal/db/sessions.go](internal/db/sessions.go) — new `Rotate(ctx, oldID, newID, accessTTL, refreshWindow)`. Transactional `SELECT … FOR UPDATE` on the old row, hard-cap check in Go, atomic `UPDATE` swapping `id` + `refreshed_at` + `expires_at`. Returns `ErrNotFound` for unknown-id and beyond-window — same response so callers can collapse them. `expires_at > now()` is **not** checked here on purpose: refresh is the renewal mechanism, so insisting on a still-active access window would defeat the point.
+- [internal/httpapi/auth.go](internal/httpapi/auth.go) — `refresh` handler. Reads the session cookie, mints a new id, calls `Rotate`, writes new session + new CSRF cookies on success (204), clears both cookies on any failure (401). `writeRefreshFailure` helper enforces identical response shape across failure paths.
+- [internal/httpapi/router.go](internal/httpapi/router.go) — `POST /v1/auth/refresh` mounted in the **public** group. Rationale documented inline: putting it behind `RequireSession` would defeat its purpose; CSRF is unnecessary because SameSite=Lax blocks cross-site cookie-bearing POSTs.
+- [internal/httpapi/cookie.go](internal/httpapi/cookie.go) — both `NewSession` and `NewCSRF` now use `auth.SessionAccessTTL` for `Expires` (was the old 7 d `SessionTTL`).
+- [cmd/camhub/main.go](cmd/camhub/main.go) — background goroutine: one immediate purge at startup, then every 10 min. Exits cleanly on context cancellation. Reads expired-row count only when > 0 to keep the log quiet.
+- [internal/config/config.go](internal/config/config.go) — removed `SessionKey []byte` field, the `readSecret("CAMHUB_SESSION_KEY", …)` block, the `≥ 32 bytes` validation, and the unused `errors` import.
+- [docker-compose.yml](docker-compose.yml) + [docker-compose.prod.yml](docker-compose.prod.yml) — dropped `CAMHUB_SESSION_KEY_FILE` from env, `session_key` from the `secrets` list, and the top-level `session_key` declaration.
+- [Makefile](Makefile) — `secrets-init` no longer writes `secrets/session_key`; `secrets-check-prod` no longer verifies it.
+- [.github/workflows/ci.yml](.github/workflows/ci.yml) — removed `CAMHUB_SESSION_KEY` from the test env.
+- [README.md](README.md) — dropped the `CAMHUB_SESSION_KEY_FILE` row from the config table.
+- Tests — [internal/httpapi/refresh_test.go](internal/httpapi/refresh_test.go) (new): no-cookie / unknown-session / beyond-window / DB-error / valid-rotation paths; `stubSessions.Rotate` mirrors the real store's invalidate-old / install-new semantics so the "old id no longer usable" check is meaningful. Plus cookie-TTL pin tests for both `NewSession` and `NewCSRF`.
+
 ### ✅ PR-S4 — CSRF for cookie-auth mutating routes (SEC-004)
 
 Double-submit token plus an optional Origin/Referer allow-list as defense in depth. PATs (Bearer auth, M2) bypass automatically.
@@ -175,7 +192,6 @@ Open before applying:
 
 ### M0.5 remainder
 
-- **PR-S5** — Session model & lifecycle (SEC-005, SEC-009): decide [Plan.md](Plan.md) §15 Q8 + Q9, remove or actually use `SessionKey`, implement refresh/rotation, background `PurgeExpired`.
 - **PR-S6** — Bootstrap secret handling (SEC-007): `--password-file`, TTY prompt, README updates.
 - **PR-S7** — Security regression tests (SEC-010): password hash/verify, login-cookie-flag handler tests, `/me` matrix, role-middleware tests.
 
@@ -190,7 +206,7 @@ Open before applying:
 ## How to run locally
 
 ```bash
-make secrets-init           # one-time: write secrets/postgres_password, session_key, db_url
+make secrets-init           # one-time: write secrets/postgres_password, db_url
 docker compose up -d --build
 
 curl -s http://localhost:8080/healthz | jq

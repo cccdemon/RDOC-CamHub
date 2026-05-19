@@ -42,9 +42,11 @@ func (c SessionCookieConfig) NewClearing(name string) *http.Cookie {
 }
 
 // NewSession is shorthand for the session cookie with the canonical name
-// and TTL.
+// and access TTL. PR-S5: the browser cookie lives only for the access
+// window; refresh must roll it forward before then. Hard cap is enforced
+// server-side via sessions.created_at + SessionRefreshWindow.
 func (c SessionCookieConfig) NewSession(value string) *http.Cookie {
-	return c.New(auth.SessionCookieName, value, time.Now().Add(auth.SessionTTL))
+	return c.New(auth.SessionCookieName, value, time.Now().Add(auth.SessionAccessTTL))
 }
 
 // NewCSRF returns the CSRF double-submit cookie. Same Secure/Domain/Path/
@@ -61,7 +63,7 @@ func (c SessionCookieConfig) NewCSRF(value string) *http.Cookie {
 		HttpOnly: false,
 		Secure:   c.Secure,
 		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(auth.SessionTTL),
+		Expires:  time.Now().Add(auth.SessionAccessTTL),
 	}
 }
 

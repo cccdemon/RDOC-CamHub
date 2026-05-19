@@ -355,12 +355,14 @@ Each item below is a self-contained PR. The grouping respects the priority order
 - Apply automatically to the `authenticated` and `admin` router groups from PR-S3.
 - Tests: missing token → 403, mismatched token → 403, valid token → 200, bearer-auth path unaffected.
 
-### PR-S5 — Session model & lifecycle (SEC-005, SEC-009)
+### PR-S5 — Session model & lifecycle (SEC-005, SEC-009) — ✅ done 2026-05-19
 
-- Resolve open question #8 above. Default plan: keep random ID, **remove `SessionKey`** from required config, update [README.md](README.md) wording, and document the model in a new `docs/sessions.md` (or inline in CLAUDE.md).
-- Resolve open question #9. Default plan: 15 min access TTL on the cookie, 7 d refresh window via `sessions.refreshed_at`; rotate `id` on each refresh. Provide `POST /v1/auth/refresh`.
-- Background goroutine in `cmd/camhub serve` invokes `sessions.PurgeExpired` every 10 min.
-- Tests: refresh path issues a new id and invalidates the old one; expired sessions are gone after purge; cookie TTL matches code constant.
+- `CAMHUB_SESSION_KEY` removed from required config; cascaded out of compose, Makefile `secrets-init`/`secrets-check-prod`, CI workflow, and README. The random 32-byte hex session id is the credential.
+- Two-tier lifecycle via [internal/auth/session.go](internal/auth/session.go): `SessionAccessTTL = 15 min`, `SessionRefreshWindow = 7 d`. Cookie `Max-Age` tracks `SessionAccessTTL`; the hard cap is enforced server-side against `sessions.created_at + SessionRefreshWindow`.
+- `POST /v1/auth/refresh` is a public route ([internal/httpapi/router.go](internal/httpapi/router.go), [auth.go](internal/httpapi/auth.go) `refresh`). Rotates the session id atomically via `db.SessionStore.Rotate`. All failure modes collapse into 401 + cleared cookies so a stale or out-of-window cookie can't be probed.
+- `db.SessionStore.Rotate` ([internal/db/sessions.go](internal/db/sessions.go)) does the swap in a transaction with `SELECT … FOR UPDATE` so concurrent refreshes can't both succeed.
+- Background `PurgeExpired` goroutine in `cmd/camhub serve` ([cmd/camhub/main.go](cmd/camhub/main.go)) runs once at startup, then every 10 min.
+- Tests: [internal/httpapi/refresh_test.go](internal/httpapi/refresh_test.go) — no cookie / unknown / beyond-window / DB error / success-rotates-id paths, plus cookie-TTL pin tests for both session and CSRF cookies.
 
 ### PR-S6 — Bootstrap secret handling (SEC-007)
 

@@ -56,7 +56,6 @@ All config via env vars; secrets via file paths (never inline).
 |---|---|---|
 | `CAMHUB_LISTEN` | `:8080` | HTTP listen address |
 | `CAMHUB_DB_URL` / `CAMHUB_DB_URL_FILE` | _required_ | `postgres://user:pass@host:5432/camhub` |
-| `CAMHUB_SESSION_KEY_FILE` | _required_ | ≥32-byte secret. Currently loaded but unused (see Plan §16 PR-S5) |
 | `CAMHUB_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `CAMHUB_COOKIE_DOMAIN` | empty | Domain attribute on session/CSRF cookies. Leave empty for host-only cookies |
 | `CAMHUB_DEV_INSECURE_COOKIE` | unset | Set to `1` for local plain-HTTP dev. Disables the `Secure` cookie attribute. **Never set in production.** |

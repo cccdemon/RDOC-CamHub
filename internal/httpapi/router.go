@@ -29,6 +29,10 @@ type SessionWriter interface {
 	Get(ctx context.Context, id string) (*db.Session, error)
 	GetActiveWithUser(ctx context.Context, id string) (*db.SessionWithUser, error)
 	Delete(ctx context.Context, id string) error
+	// Rotate is the backing operation for POST /v1/auth/refresh. See
+	// db.SessionStore.Rotate for the semantics (hard cap on
+	// createdAt + refreshWindow; access-expired but in-window allowed).
+	Rotate(ctx context.Context, oldID, newID string, accessTTL, refreshWindow time.Duration) (*db.Session, error)
 }
 
 type Server struct {
@@ -86,6 +90,11 @@ func (s *Server) Router() http.Handler {
 			// attacker cannot force-logout a victim. Making it public also
 			// lets a stale-cookie holder clear their state cleanly.
 			r.Post("/logout", s.logout)
+			// Refresh is public for the same reason: the cookie itself is
+			// the credential, and SameSite=Lax blocks the cross-site CSRF
+			// vector. Putting refresh behind RequireSession would defeat
+			// its purpose (renewing an access-expired session).
+			r.Post("/refresh", s.refresh)
 		})
 	})
 

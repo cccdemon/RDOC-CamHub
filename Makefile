@@ -37,17 +37,16 @@ migrate-down:
 # Ownership: camhub runs as uid 65532 inside its container (USER directive
 # in deploy/Dockerfile). Docker Compose's file-based secrets honor neither
 # uid/gid/mode options outside Swarm, so the host file's owner must match
-# what the container's process expects. We chown the camhub-readable
-# secrets (db_url, session_key) to 65532. postgres_password stays
-# root-owned — postgres-alpine reads it as root before dropping privs.
+# what the container's process expects. We chown db_url to 65532.
+# postgres_password stays root-owned — postgres-alpine reads it as root
+# before dropping privs.
 secrets-init:
 	@mkdir -p secrets
 	@test -f secrets/postgres_password || (head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'         > secrets/postgres_password && echo "wrote secrets/postgres_password")
-	@test -f secrets/session_key       || (head -c 32 /dev/urandom | base64 | tr -d '\n'              > secrets/session_key       && echo "wrote secrets/session_key")
 	@test -f secrets/db_url            || (printf 'postgres://camhub:%s@postgres:5432/camhub?sslmode=disable' "$$(cat secrets/postgres_password)" > secrets/db_url && echo "wrote secrets/db_url")
 	@chmod 600 secrets/*
-	@chown 65532:65532 secrets/db_url secrets/session_key 2>/dev/null && echo "chowned db_url + session_key to 65532:65532 (camhub uid)" || \
-	    echo "WARN: chown to 65532 failed — run 'sudo chown 65532:65532 secrets/db_url secrets/session_key' or expect EACCES inside the camhub container"
+	@chown 65532:65532 secrets/db_url 2>/dev/null && echo "chowned db_url to 65532:65532 (camhub uid)" || \
+	    echo "WARN: chown to 65532 failed — run 'sudo chown 65532:65532 secrets/db_url' or expect EACCES inside the camhub container"
 
 clean:
 	rm -rf bin/
@@ -74,10 +73,8 @@ prod-logs:
 # generate this — it's a real credential. Just verify it exists.
 secrets-check-prod:
 	@test -f secrets/postgres_password || (echo "missing secrets/postgres_password — run 'make secrets-init'" && exit 1)
-	@test -f secrets/session_key       || (echo "missing secrets/session_key — run 'make secrets-init'" && exit 1)
 	@test -f secrets/db_url            || (echo "missing secrets/db_url — run 'make secrets-init'" && exit 1)
 	@test -f secrets/cf_api_token      || (echo "missing secrets/cf_api_token — write your Cloudflare API token (Zone:DNS:Edit on raumdock.org) into this file, then chmod 600" && exit 1)
-	@# camhub runs as uid 65532; secrets it reads must be owned by that uid.
-	@stat -c '%u' secrets/db_url      | grep -q '^65532$$' || (echo "secrets/db_url is not owned by uid 65532 — running: chown 65532:65532 secrets/db_url" && chown 65532:65532 secrets/db_url)
-	@stat -c '%u' secrets/session_key | grep -q '^65532$$' || (echo "secrets/session_key is not owned by uid 65532 — running: chown 65532:65532 secrets/session_key" && chown 65532:65532 secrets/session_key)
+	@# camhub runs as uid 65532; the secret it reads must be owned by that uid.
+	@stat -c '%u' secrets/db_url | grep -q '^65532$$' || (echo "secrets/db_url is not owned by uid 65532 — running: chown 65532:65532 secrets/db_url" && chown 65532:65532 secrets/db_url)
 	@echo "prod secrets present"

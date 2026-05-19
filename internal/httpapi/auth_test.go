@@ -36,9 +36,11 @@ func (s *stubUsers) ByEmail(_ context.Context, email string) (*db.User, error) {
 // SessionWithUser they want to return for a given cookie value; the
 // pre-session-create branches in login don't touch any of this.
 type stubSessions struct {
-	created int
-	active  map[string]*db.SessionWithUser
-	getErr  error
+	created   int
+	rotated   int
+	active    map[string]*db.SessionWithUser
+	getErr    error
+	rotateErr error
 }
 
 func (n *stubSessions) Create(_ context.Context, _ string, _ int64, _ time.Duration, _ string, _ netip.Addr) error {
@@ -58,6 +60,29 @@ func (n *stubSessions) GetActiveWithUser(_ context.Context, id string) (*db.Sess
 	return nil, db.ErrNotFound
 }
 func (n *stubSessions) Delete(_ context.Context, _ string) error { return nil }
+
+func (n *stubSessions) Rotate(_ context.Context, oldID, newID string, accessTTL, _ time.Duration) (*db.Session, error) {
+	if n.rotateErr != nil {
+		return nil, n.rotateErr
+	}
+	swu, ok := n.active[oldID]
+	if !ok {
+		return nil, db.ErrNotFound
+	}
+	// Simulate the real Rotate: remove the old id, install the new one,
+	// preserve created_at so refresh-window tests can read it back.
+	delete(n.active, oldID)
+	rotated := *swu
+	rotated.Session.ID = newID
+	rotated.Session.RefreshedAt = time.Now()
+	rotated.Session.ExpiresAt = time.Now().Add(accessTTL)
+	if n.active == nil {
+		n.active = map[string]*db.SessionWithUser{}
+	}
+	n.active[newID] = &rotated
+	n.rotated++
+	return &rotated.Session, nil
+}
 
 func newTestServer(t *testing.T, users UserLookup, sessions SessionWriter) *Server {
 	t.Helper()

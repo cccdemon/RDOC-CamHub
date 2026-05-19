@@ -6,7 +6,23 @@ import (
 	"time"
 )
 
-const SessionTTL = 7 * 24 * time.Hour
+// Two-tier session lifecycle (PR-S5, Plan §15 Q9 resolution).
+//
+//   SessionAccessTTL — server-side validity of a single session id. After
+//     this elapses without a successful POST /v1/auth/refresh, the row's
+//     expires_at is in the past and RequireSession returns 401. The cookie
+//     itself is also set with Max-Age = SessionAccessTTL: after 15 min of
+//     idle the browser stops sending it, so the UI must call /refresh
+//     proactively to roll the session forward.
+//
+//   SessionRefreshWindow — hard cap measured from the original login
+//     (sessions.created_at). Refresh is allowed only while
+//     created_at + SessionRefreshWindow > now(); beyond that the user must
+//     re-authenticate even if the cookie is still present.
+const (
+	SessionAccessTTL     = 15 * time.Minute
+	SessionRefreshWindow = 7 * 24 * time.Hour
+)
 
 const (
 	SessionCookieName = "camhub_session"

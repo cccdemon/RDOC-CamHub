@@ -86,7 +86,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := ClientIP(r.Context())
-	if err := s.Sessions.Create(r.Context(), sid, user.ID, auth.SessionTTL, r.UserAgent(), ip); err != nil {
+	if err := s.Sessions.Create(r.Context(), sid, user.ID, auth.SessionAccessTTL, r.UserAgent(), ip); err != nil {
 		s.Logger.Error("login: create session", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal", "session create failed")
 		return
@@ -99,6 +99,64 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		"email":   user.Email,
 		"role":    user.Role,
 	})
+}
+
+// refresh rotates the session id and resets the access TTL. PR-S5.
+//
+// Trust model: the session cookie is the credential. Refresh is allowed
+// while sessions.created_at + auth.SessionRefreshWindow > now(). On
+// rotation, the old id is invalidated atomically (UPDATE in a tx); any
+// concurrent request still holding the old id sees 401 from the very next
+// RequireSession call.
+//
+// All failure modes (missing cookie, unknown session, beyond refresh
+// window, DB error) collapse into 401 + cleared cookies. The client
+// treats 401 as "go to /login" regardless of cause; the cause is private
+// to the server. DB errors are logged for ops; everything else is normal.
+func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie(auth.SessionCookieName)
+	if err != nil || c.Value == "" {
+		s.writeRefreshFailure(w)
+		return
+	}
+
+	newID, err := auth.NewSessionID()
+	if err != nil {
+		s.Logger.Error("refresh: new session id", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal", "session create failed")
+		return
+	}
+
+	_, err = s.Sessions.Rotate(r.Context(), c.Value, newID, auth.SessionAccessTTL, auth.SessionRefreshWindow)
+	if errors.Is(err, db.ErrNotFound) {
+		s.writeRefreshFailure(w)
+		return
+	}
+	if err != nil {
+		s.Logger.Error("refresh: rotate", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal", "session refresh failed")
+		return
+	}
+
+	csrf, err := auth.NewCSRFToken()
+	if err != nil {
+		s.Logger.Error("refresh: new csrf", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal", "csrf create failed")
+		return
+	}
+
+	http.SetCookie(w, s.Cookies.NewSession(newID))
+	http.SetCookie(w, s.Cookies.NewCSRF(csrf))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeRefreshFailure returns 401 and clears the session + CSRF cookies.
+// Used for every refresh-failure path so the response is identical
+// regardless of cause (missing cookie, expired, beyond hard cap, …).
+func (s *Server) writeRefreshFailure(w http.ResponseWriter) {
+	http.SetCookie(w, s.Cookies.NewClearing(auth.SessionCookieName))
+	http.SetCookie(w, s.Cookies.NewClearingCSRF())
+	writeError(w, http.StatusUnauthorized, "unauthorized", "no session")
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {

@@ -94,3 +94,70 @@ func (s *SessionStore) PurgeExpired(ctx context.Context) (int64, error) {
 	}
 	return tag.RowsAffected(), nil
 }
+
+// Rotate atomically swaps a session's id, resets refreshed_at + expires_at,
+// and returns the resulting row. It is the single backing operation for
+// POST /v1/auth/refresh.
+//
+// The refresh-window check (created_at + window > now()) is the hard cap:
+// once a session is older than the window it cannot be rotated even if the
+// caller still holds the cookie. Beyond that it is up to RequireSession to
+// guard the access TTL (expires_at) on subsequent requests.
+//
+// expires_at itself is NOT checked here on purpose: refresh is the
+// mechanism for renewing an access-expired session within the refresh
+// window. Checking it would force the UI to refresh strictly before the
+// access TTL elapses with zero tolerance for clock skew or latency.
+//
+// Returns ErrNotFound if the id is unknown OR the session is outside the
+// refresh window — same response for both so callers can collapse them
+// into one 401 without leaking which.
+func (s *SessionStore) Rotate(ctx context.Context, oldID, newID string, accessTTL, refreshWindow time.Duration) (*Session, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var (
+		userID    int64
+		createdAt time.Time
+		userAgent string
+	)
+	const selectQ = `SELECT user_id, created_at, COALESCE(user_agent, '')
+	                 FROM sessions WHERE id = $1 FOR UPDATE`
+	if err := tx.QueryRow(ctx, selectQ, oldID).Scan(&userID, &createdAt, &userAgent); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+
+	// Hard cap. Compared in Go to keep the SQL portable across deployments
+	// that might have clock-drift between app and DB.
+	if time.Since(createdAt) > refreshWindow {
+		return nil, ErrNotFound
+	}
+
+	now := time.Now()
+	newExpires := now.Add(accessTTL)
+	const updateQ = `UPDATE sessions
+	                 SET id = $1, refreshed_at = $2, expires_at = $3
+	                 WHERE id = $4`
+	if _, err := tx.Exec(ctx, updateQ, newID, now, newExpires, oldID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return &Session{
+		ID:          newID,
+		UserID:      userID,
+		CreatedAt:   createdAt,
+		RefreshedAt: now,
+		ExpiresAt:   newExpires,
+		UserAgent:   userAgent,
+	}, nil
+}

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -11,10 +10,9 @@ import (
 )
 
 type Config struct {
-	Listen     string
-	DBURL      string
-	SessionKey []byte
-	LogLevel   slog.Level
+	Listen   string
+	DBURL    string
+	LogLevel slog.Level
 
 	// Cookie defaults applied by httpapi to session/CSRF cookies.
 	CookieSecure bool
@@ -80,15 +78,6 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("db url: %w", err)
 	}
 	c.DBURL = dbURL
-
-	sessionKey, err := readSecret("CAMHUB_SESSION_KEY", "CAMHUB_SESSION_KEY_FILE")
-	if err != nil {
-		return nil, fmt.Errorf("session key: %w", err)
-	}
-	if len(sessionKey) < 32 {
-		return nil, errors.New("session key: must be at least 32 bytes")
-	}
-	c.SessionKey = []byte(sessionKey)
 
 	return c, nil
 }

@@ -308,8 +308,8 @@ For traceability — these are out of scope for this repo but blocking:
 5. **Stream health probe** — should the hub HEAD `/healthz` on each cam's public hostname, or rely purely on heartbeat? *Recommendation: both, the HEAD catches "cam process up but stream broken".*
 6. **OBS signed-URL TTL.** 1 h is convenient; 10 min is safer. *Recommendation: 1 h with per-token override.*
 7. Should `shell_exec` ever be added (admin-only, signed twice)? *Recommendation: no, unless a concrete need appears.*
-8. **Session model — random ID vs HMAC-signed cookie (SEC-005).** Current code uses a server-stored random ID and the loaded `SessionKey` is unused. Either remove `SessionKey` from required config (Option A) or actually sign the cookie value (Option B). *Recommendation: Option A — random ID with DB store is a valid design, simpler, and revocation is trivial. Decide before SEC-005 is closed.*
-9. **Session TTL — 7 d vs Plan §5.1's 15 min + refresh (SEC-009).** Code ships 7 d; Plan says short access + rotating refresh. Either tighten the code or relax the plan. *Recommendation: tighten — 15 min access + 7 d refresh with rotation. If we accept 7 d, add reauth-on-sensitive-action and document the tradeoff explicitly.*
+8. ~~**Session model — random ID vs HMAC-signed cookie (SEC-005).**~~ **Resolved 2026-05-20: Option A.** Random 32-byte session ID validated against the DB stays the model; `CAMHUB_SESSION_KEY` will be removed from required config in PR-S5. Revocation stays a single `DELETE FROM sessions`.
+9. ~~**Session TTL — 7 d vs Plan §5.1's 15 min + refresh (SEC-009).**~~ **Resolved 2026-05-20: Option A.** 15 min access cookie + 7 d rotating refresh window. PR-S5 adds `POST /v1/auth/refresh`; refresh mints a new session id and invalidates the old one. Background goroutine in `cmd/camhub serve` purges expired sessions every 10 min.
 
 ## 16. Security baseline (M0.5) — PR-sized work
 

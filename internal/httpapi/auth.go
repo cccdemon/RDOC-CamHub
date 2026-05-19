@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/raumdock/rdoc-camhub/internal/auth"
 	"github.com/raumdock/rdoc-camhub/internal/db"
@@ -81,6 +80,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "session create failed")
 		return
 	}
+	csrf, err := auth.NewCSRFToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "csrf create failed")
+		return
+	}
 	ip := ClientIP(r.Context())
 	if err := s.Sessions.Create(r.Context(), sid, user.ID, auth.SessionTTL, r.UserAgent(), ip); err != nil {
 		s.Logger.Error("login: create session", "err", err)
@@ -89,6 +93,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.SetCookie(w, s.Cookies.NewSession(sid))
+	http.SetCookie(w, s.Cookies.NewCSRF(csrf))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user_id": user.ID,
 		"email":   user.Email,
@@ -104,38 +109,22 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.SetCookie(w, s.Cookies.NewClearing(auth.SessionCookieName))
+	http.SetCookie(w, s.Cookies.NewClearingCSRF())
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// me returns the current Principal. Mounted under the authenticated group,
+// so RequireSession has already validated the cookie and attached the
+// principal — this handler trusts that and never touches the DB itself.
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie(auth.SessionCookieName)
-	if err != nil || c.Value == "" {
+	p, ok := PrincipalFrom(r.Context())
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "no session")
 		return
 	}
-	sess, err := s.Sessions.Get(r.Context(), c.Value)
-	if errors.Is(err, db.ErrNotFound) {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "session not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "session lookup failed")
-		return
-	}
-	if time.Now().After(sess.ExpiresAt) {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "session expired")
-		return
-	}
-	const q = `SELECT email, role FROM users WHERE id = $1`
-	var email, role string
-	if err := s.Pool.QueryRow(r.Context(), q, sess.UserID).Scan(&email, &role); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "user lookup failed")
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user_id":    sess.UserID,
-		"email":      email,
-		"role":       role,
-		"expires_at": sess.ExpiresAt,
+		"user_id": p.UserID,
+		"email":   p.Email,
+		"role":    p.Role,
 	})
 }

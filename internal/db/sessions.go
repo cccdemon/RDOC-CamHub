@@ -19,6 +19,15 @@ type Session struct {
 	UserAgent   string
 }
 
+// SessionWithUser is the auth-middleware view: a not-yet-expired session
+// joined with the user's email and role in a single round-trip. Used by
+// RequireSession to build a Principal without a second DB call per request.
+type SessionWithUser struct {
+	Session
+	UserEmail string
+	UserRole  Role
+}
+
 type SessionStore struct {
 	pool *pgxpool.Pool
 }
@@ -34,6 +43,29 @@ func (s *SessionStore) Create(ctx context.Context, id string, userID int64, ttl 
 	}
 	_, err := s.pool.Exec(ctx, q, id, userID, time.Now().Add(ttl), ua, ipArg)
 	return err
+}
+
+// GetActiveWithUser returns the session plus its user, only if the session
+// has not expired. ErrNotFound covers both "no such session" and "expired".
+func (s *SessionStore) GetActiveWithUser(ctx context.Context, id string) (*SessionWithUser, error) {
+	const q = `
+		SELECT s.id, s.user_id, s.created_at, s.expires_at, s.refreshed_at,
+		       COALESCE(s.user_agent, ''), u.email, u.role
+		FROM sessions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.id = $1 AND s.expires_at > now()`
+	out := &SessionWithUser{}
+	err := s.pool.QueryRow(ctx, q, id).Scan(
+		&out.ID, &out.UserID, &out.CreatedAt, &out.ExpiresAt, &out.RefreshedAt, &out.UserAgent,
+		&out.UserEmail, &out.UserRole,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *SessionStore) Get(ctx context.Context, id string) (*Session, error) {

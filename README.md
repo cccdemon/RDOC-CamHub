@@ -63,6 +63,7 @@ All config via env vars; secrets via file paths (never inline).
 | `CAMHUB_TRUSTED_PROXIES` | empty | Comma-separated CIDRs whose `X-Forwarded-For` / `X-Real-IP` are trusted. Empty → headers ignored, peer addr used. Example: `172.16.0.0/12,10.0.0.0/8` |
 | `CAMHUB_LOGIN_RATE_PER_IP` | `10` | Login attempts allowed per window per client IP. `0` disables the limiter |
 | `CAMHUB_LOGIN_RATE_WINDOW_SECS` | `60` | Rolling window for the login limiter, in seconds. `0` disables the limiter |
+| `CAMHUB_ALLOWED_ORIGINS` | empty | Comma-separated full origins for the CSRF `Origin`/`Referer` allow-list, e.g. `https://app.raumdock.org,https://api.raumdock.org`. Empty disables the check (token alone gates the request). **Set in production.** |
 
 ### Trusted-proxy hint for Docker Compose
 

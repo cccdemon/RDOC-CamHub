@@ -31,20 +31,33 @@ func (s *stubUsers) ByEmail(_ context.Context, email string) (*db.User, error) {
 	return nil, db.ErrNotFound
 }
 
-// nopSessions is a SessionWriter that never gets called in these tests
-// (every assertion is on the pre-session-create branches).
-type nopSessions struct {
+// stubSessions implements SessionWriter against an in-memory map keyed by
+// session id. RequireSession-driven tests populate `active` with the
+// SessionWithUser they want to return for a given cookie value; the
+// pre-session-create branches in login don't touch any of this.
+type stubSessions struct {
 	created int
+	active  map[string]*db.SessionWithUser
+	getErr  error
 }
 
-func (n *nopSessions) Create(_ context.Context, _ string, _ int64, _ time.Duration, _ string, _ netip.Addr) error {
+func (n *stubSessions) Create(_ context.Context, _ string, _ int64, _ time.Duration, _ string, _ netip.Addr) error {
 	n.created++
 	return nil
 }
-func (n *nopSessions) Get(_ context.Context, _ string) (*db.Session, error) {
+func (n *stubSessions) Get(_ context.Context, _ string) (*db.Session, error) {
 	return nil, db.ErrNotFound
 }
-func (n *nopSessions) Delete(_ context.Context, _ string) error { return nil }
+func (n *stubSessions) GetActiveWithUser(_ context.Context, id string) (*db.SessionWithUser, error) {
+	if n.getErr != nil {
+		return nil, n.getErr
+	}
+	if swu, ok := n.active[id]; ok {
+		return swu, nil
+	}
+	return nil, db.ErrNotFound
+}
+func (n *stubSessions) Delete(_ context.Context, _ string) error { return nil }
 
 func newTestServer(t *testing.T, users UserLookup, sessions SessionWriter) *Server {
 	t.Helper()
@@ -71,7 +84,7 @@ func doLogin(t *testing.T, srv *Server, body []byte) *httptest.ResponseRecorder 
 
 func TestLogin_BodyTooLarge_Returns413_BeforeDB(t *testing.T) {
 	users := &stubUsers{users: map[string]*db.User{}}
-	srv := newTestServer(t, users, &nopSessions{})
+	srv := newTestServer(t, users, &stubSessions{})
 
 	// 5 KiB body — well over loginMaxBody (4 KiB).
 	junk := strings.Repeat("x", 5*1024)
@@ -96,7 +109,7 @@ func TestLogin_BodyTooLarge_Returns413_BeforeDB(t *testing.T) {
 
 func TestLogin_PasswordTooLong_Returns400_BeforeArgon2AndBeforeDB(t *testing.T) {
 	users := &stubUsers{users: map[string]*db.User{}}
-	srv := newTestServer(t, users, &nopSessions{})
+	srv := newTestServer(t, users, &stubSessions{})
 
 	// Password exactly 1025 chars — one over the cap. Email kept short so
 	// the whole body still fits inside MaxBytesReader (4 KiB).
@@ -130,7 +143,7 @@ func TestLogin_PasswordTooLong_Returns400_BeforeArgon2AndBeforeDB(t *testing.T) 
 
 func TestLogin_EmailTooLong_Returns400_BeforeDB(t *testing.T) {
 	users := &stubUsers{users: map[string]*db.User{}}
-	srv := newTestServer(t, users, &nopSessions{})
+	srv := newTestServer(t, users, &stubSessions{})
 
 	longEmail := strings.Repeat("a", maxEmailLen) + "@b.com" // > 320 chars
 	body := []byte(`{"email":"` + longEmail + `","password":"shortpass"}`)
@@ -156,7 +169,7 @@ func TestLogin_ErrorParity_UnknownEmail_vs_WrongPassword(t *testing.T) {
 	users := &stubUsers{users: map[string]*db.User{
 		"known@example.org": {ID: 1, Email: "known@example.org", PasswordHash: hash, Role: db.RoleAdmin},
 	}}
-	srv := newTestServer(t, users, &nopSessions{})
+	srv := newTestServer(t, users, &stubSessions{})
 
 	unknown := doLogin(t, srv, []byte(`{"email":"missing@example.org","password":"whatever"}`))
 	wrong := doLogin(t, srv, []byte(`{"email":"known@example.org","password":"not-the-right-one"}`))

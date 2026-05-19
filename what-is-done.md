@@ -95,16 +95,41 @@ Source: [Securityfindings.md](Securityfindings.md), tracked as PR-S1..PR-S7 in [
   - `TestLogin_ErrorParity_UnknownEmail_vs_WrongPassword` — byte-identical response bodies and status codes; defence against account enumeration.
 - **Tiny interface refactor** ([internal/httpapi/router.go](internal/httpapi/router.go)): `Server.Users` is now `UserLookup`, `Server.Sessions` is `SessionWriter`. `*db.UserStore` / `*db.SessionStore` continue to satisfy them; the only consumer-visible change is that tests can now inject stubs without standing up Postgres.
 
+### ✅ PR-S3 — Central AuthN/AuthZ middleware (SEC-003)
+
+- [internal/db/sessions.go](internal/db/sessions.go) — new `SessionWithUser` struct + `GetActiveWithUser(ctx, id)`. Single JOINed query (`sessions JOIN users` with `WHERE expires_at > now()`), so expired sessions are filtered server-side and look identical to "unknown session" to the caller. One round-trip per authenticated request.
+- [internal/httpapi/principal.go](internal/httpapi/principal.go) — new `Principal{UserID, Email, Role, SessionID}` type. `PrincipalFrom(ctx) (Principal, bool)` is the public read API; `withPrincipal(ctx, p)` is package-internal so handlers can't fake a principal.
+- [internal/httpapi/middleware_auth.go](internal/httpapi/middleware_auth.go) — two middlewares:
+  - `(*Server).RequireSession` — reads the session cookie, calls `GetActiveWithUser`, attaches the `Principal`. Missing / unknown / expired all collapse into one 401 `unauthorized` (no enumeration leak). DB error → 500.
+  - `RequireRole(roles ...db.Role)` — variadic any-of. Mounted after `RequireSession`; refuses to run on its own (returns 401 if no principal in context).
+- [internal/httpapi/router.go](internal/httpapi/router.go) — router restructured into three explicit chi `Group`s: **public** (`/healthz`, `/v1/auth/login`, `/v1/auth/logout`), **authenticated** (`/v1/auth/me`, mounts `RequireSession`), **admin** (declared but empty in PR-S3; future endpoints land here). Logout stays public deliberately — `SameSite=Lax` defangs cross-site forced logout, and stale-cookie holders can clear state cleanly. `SessionWriter` interface gained `GetActiveWithUser`.
+- [internal/httpapi/auth.go](internal/httpapi/auth.go) — `/me` collapsed from 30 lines (cookie read + Sessions.Get + expiry check + Pool.QueryRow for role) to ~8 lines: it just reads `PrincipalFrom(ctx)`. All session/role logic lives in middleware.
+
+### ✅ PR-S4 — CSRF for cookie-auth mutating routes (SEC-004)
+
+Double-submit token plus an optional Origin/Referer allow-list as defense in depth. PATs (Bearer auth, M2) bypass automatically.
+
+- [internal/auth/session.go](internal/auth/session.go) — new `NewCSRFToken()` (32-byte random hex, independent of session ID) and the constants `CSRFCookieName = "camhub_csrf"` and `CSRFHeaderName = "X-CSRF-Token"`.
+- [internal/httpapi/cookie.go](internal/httpapi/cookie.go) — `SessionCookieConfig.NewCSRF(value)` (HttpOnly=false so JS can echo it back) and `NewClearingCSRF()` for logout. Same `Secure`/`Domain`/`Path`/`SameSite=Lax` as the session cookie; expiry tracks `SessionTTL`.
+- [internal/httpapi/middleware_csrf.go](internal/httpapi/middleware_csrf.go) — `(*Server).RequireCSRF`. Order: safe-method skip (GET/HEAD/OPTIONS) → Bearer-auth skip → Origin/Referer allow-list (skipped if `AllowedOrigins` is empty) → cookie present → header present → constant-time compare via `crypto/subtle.ConstantTimeCompare`. Distinct error codes (`csrf_origin`, `csrf_missing`, `csrf_mismatch`) for ops debugging; all return 403.
+- [internal/config/config.go](internal/config/config.go) — new `AllowedOrigins []string` field + `CAMHUB_ALLOWED_ORIGINS` (comma-separated full origins, e.g. `https://app.raumdock.org`). Helper `parseCommaList` shared with future config fields.
+- [internal/httpapi/router.go](internal/httpapi/router.go) — `Options.AllowedOrigins` plumbed to `Server`. **Both** the authenticated and admin groups mount `RequireCSRF` after `RequireSession`/`RequireRole`. Pre-wired so M1's admin POSTs inherit CSRF automatically.
+- [internal/httpapi/auth.go](internal/httpapi/auth.go) — login now also generates a CSRF token and writes the `camhub_csrf` cookie alongside the session cookie. Logout clears both.
+- [cmd/camhub/main.go](cmd/camhub/main.go) — `allowed_origins` count is logged on startup.
+- [README.md](README.md) — `CAMHUB_ALLOWED_ORIGINS` documented.
+
 ### Tests added in M0.5 so far
 
-[internal/httpapi/](internal/httpapi/) — 20 tests, 13 subcases, all passing with `-race`:
+[internal/httpapi/](internal/httpapi/) — 32 test functions, ~17 additional subcases, all passing with `-race` (50 invocations total):
 
 - [cookie_test.go](internal/httpapi/cookie_test.go) — cookie flag invariants (HttpOnly, SameSite=Lax, Secure follows config) in prod, prod-with-domain, dev-insecure; clearing-cookie keeps flags asserted.
 - [trusted_ip_test.go](internal/httpapi/trusted_ip_test.go) — XFF / RealIP trust matrix: empty list ignores XFF, untrusted peer ignores XFF, trusted peer uses XFF, chain-walking stops at first untrusted hop, all-trusted chain returns innermost proxy, X-Real-IP fallback, malformed XFF safety, IPv6 peer.
 - [rate_limit_test.go](internal/httpapi/rate_limit_test.go) — nil-when-disabled, budget exhaustion → 429, per-IP isolation, refill over window.
-- [auth_test.go](internal/httpapi/auth_test.go) — handler-level: 413 body-too-large before DB; 400 length-cap before Argon2id (timing-asserted); 400 email-too-long before DB; byte-identical error parity for unknown-email vs wrong-password.
+- [auth_test.go](internal/httpapi/auth_test.go) — handler-level login tests: 413 body-too-large before DB; 400 length-cap before Argon2id (timing-asserted); 400 email-too-long before DB; byte-identical error parity for unknown-email vs wrong-password.
+- [middleware_auth_test.go](internal/httpapi/middleware_auth_test.go) — `RequireSession`: no cookie → 401, unknown session → 401, expired-as-missing parity, DB error → 500, valid → 200 + correct `Principal` in context. `RequireRole`: no principal upstream → 401, wrong role → 403, any-of matching admin/operator/viewer. `/me`: returns user info from principal, 401 if principal missing.
+- [middleware_csrf_test.go](internal/httpapi/middleware_csrf_test.go) — `RequireCSRF`: safe methods (GET/HEAD/OPTIONS) bypass; Bearer-auth bypasses; missing cookie → 403; missing header → 403; cookie/header mismatch → 403; valid match → through. Origin allow-list: empty list disables the check; matching `Origin` passes; mismatched origin blocks; Referer fallback works; no Origin/Referer with non-empty list blocks. `Login`: writes both `camhub_session` (HttpOnly) and `camhub_csrf` (NOT HttpOnly) cookies on success.
 
-Remaining auth tests (`/me` matrix, role-middleware coverage once PR-S3 lands, password hash/verify) deferred to PR-S7.
+Remaining auth tests (password hash/verify direct, full HTTP integration with real cookies through chi) deferred to PR-S7.
 
 ### Smoke-test guidance (after PR-S2)
 
@@ -132,8 +157,6 @@ curl -s -i -c /tmp/c.txt -X POST http://localhost:8080/v1/auth/login \
 
 ### M0.5 remainder
 
-- **PR-S3** — Central AuthN/AuthZ middleware (SEC-003): `Principal` in context, `RequireSession`, `RequireRole`, three router groups.
-- **PR-S4** — CSRF for cookie-auth mutating routes (SEC-004): double-submit token, Origin/Referer check, bypass for `Authorization: Bearer` flows.
 - **PR-S5** — Session model & lifecycle (SEC-005, SEC-009): decide [Plan.md](Plan.md) §15 Q8 + Q9, remove or actually use `SessionKey`, implement refresh/rotation, background `PurgeExpired`.
 - **PR-S6** — Bootstrap secret handling (SEC-007): `--password-file`, TTY prompt, README updates.
 - **PR-S7** — Security regression tests (SEC-010): password hash/verify, login-cookie-flag handler tests, `/me` matrix, role-middleware tests.

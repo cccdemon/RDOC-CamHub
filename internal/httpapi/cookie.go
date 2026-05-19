@@ -46,3 +46,37 @@ func (c SessionCookieConfig) NewClearing(name string) *http.Cookie {
 func (c SessionCookieConfig) NewSession(value string) *http.Cookie {
 	return c.New(auth.SessionCookieName, value, time.Now().Add(auth.SessionTTL))
 }
+
+// NewCSRF returns the CSRF double-submit cookie. Same Secure/Domain/Path/
+// SameSite as the session cookie, but *not* HttpOnly: the browser-side JS
+// has to read it to echo it back in the X-CSRF-Token header. The token's
+// secrecy comes from the same-origin policy preventing cross-site JS reads,
+// not from HttpOnly.
+func (c SessionCookieConfig) NewCSRF(value string) *http.Cookie {
+	return &http.Cookie{
+		Name:     auth.CSRFCookieName,
+		Value:    value,
+		Path:     "/",
+		Domain:   c.Domain,
+		HttpOnly: false,
+		Secure:   c.Secure,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Now().Add(auth.SessionTTL),
+	}
+}
+
+// NewClearingCSRF returns a cookie that clears the CSRF cookie (HttpOnly
+// stays false to match the original; otherwise some browsers refuse the
+// update).
+func (c SessionCookieConfig) NewClearingCSRF() *http.Cookie {
+	return &http.Cookie{
+		Name:     auth.CSRFCookieName,
+		Value:    "",
+		Path:     "/",
+		Domain:   c.Domain,
+		HttpOnly: false,
+		Secure:   c.Secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	}
+}

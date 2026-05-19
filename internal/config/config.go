@@ -29,6 +29,13 @@ type Config struct {
 	// Login rate limiting. 0 in either field disables the limiter.
 	LoginRateLimitPerIP      int
 	LoginRateLimitWindowSecs int
+
+	// AllowedOrigins is the explicit Origin/Referer allow-list used by the
+	// CSRF middleware as defense-in-depth. Each entry is a full origin
+	// (scheme + host [+ :port]), e.g. "https://app.raumdock.org".
+	// Empty list => Origin/Referer check is skipped; the double-submit
+	// token alone gates the request. Set in production.
+	AllowedOrigins []string
 }
 
 func Load() (*Config, error) {
@@ -63,6 +70,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	c.LoginRateLimitWindowSecs = windowSecs
+
+	if raw := os.Getenv("CAMHUB_ALLOWED_ORIGINS"); raw != "" {
+		c.AllowedOrigins = parseCommaList(raw)
+	}
 
 	dbURL, err := readSecret("CAMHUB_DB_URL", "CAMHUB_DB_URL_FILE")
 	if err != nil {
@@ -126,6 +137,19 @@ func envBool(key string) bool {
 		return true
 	}
 	return false
+}
+
+// parseCommaList splits a comma-separated env value, trims whitespace
+// around each entry, and drops empty entries.
+func parseCommaList(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func parseCIDRList(s string) ([]netip.Prefix, error) {

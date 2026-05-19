@@ -383,6 +383,133 @@ Each item below is a self-contained PR. The grouping respects the priority order
 - No secrets moved back into inline env or README examples — Docker secrets stay the canonical path.
 - Run `go test ./...` after each PR.
 
+## 17. Web UI
+
+§11 picked the stack (templ + htmx, server-rendered) and §12 fixed the deployment shape (UI on `app.camhub.raumdock.org`, JSON/control on `api.camhub.raumdock.org`). This section is the missing piece: how the UI is structured, themed, and rolled out in parallel with the backend roadmap.
+
+### 17.1 Architecture
+
+- **One binary, two hosts.** The same `camhub` process serves both origins. A small host-aware middleware in `internal/webui/` mounts the HTML/static surface only when `Host == app.camhub.raumdock.org` and 404s `/v1/...` on that host. The reciprocal block 404s HTML routes on the API host. XSS on either surface therefore cannot read the other's endpoints from the same origin — cross-origin requests run through CSRF + `Origin` allow-list (PR-S4).
+- **Shared session cookie.** Already scoped `Domain=camhub.raumdock.org` (PR-S1), so a login at `app.` is valid against `api.` without a second hop. The non-`HttpOnly` `camhub_csrf` cookie is the double-submit token read by client-side JS and attached to every state-changing htmx request.
+- **Silent refresh.** Each authenticated page runs a small ticker that calls `POST /v1/auth/refresh` every 10 minutes while the tab is visible. On 401 → hard redirect to `/login`. This keeps the 15-min access window invisible to operators.
+- **Cross-origin htmx.** Pages render `<meta name="api-base">` and `<meta name="csrf">`; `static/js/camhub.js` reads both and configures `htmx.config` to prepend the API origin to `hx-*` URLs and attach `X-CSRF-Token`. No fetch wrapper, no API client — the templated HTML is the contract.
+
+### 17.2 Theme
+
+The UI adopts the raumdock visual identity from [`RDOC-Website/assets/styles.css`](../RDOC-Website/assets/styles.css) verbatim where the selectors are generic (palette, typography, hero/section frames, `.cd`/`.lst`/`.chip`/`.pill`/`.cds`, scanline overlay, corner ticks, sticky header). Streamer/member/Twitch-specific blocks are dropped.
+
+Tokens kept as-is:
+
+| Token | Value | Use |
+|---|---|---|
+| `--cyan` | `#00d4ff` | Primary accent, headings, active state |
+| `--gold` | `#f0a500` | CTA, warnings, stale status |
+| `--green` | `#00ff88` | Online, success |
+| `--red` | `#ff4444` | Offline, error, live |
+| `--bg` / `--bg2` / `--bg3` | `#04060a` / `#080e14` / `#0c1520` | Surface depth |
+| `--fg` | `#c8dce8` | Body text |
+| Display font | Bebas Neue (`RDOC Display`) | h1/h2, chips, pills |
+| Tech font | Consolas / Cascadia Mono | h3, nav, labels |
+| UI font | Segoe UI | Body |
+
+Component reuse:
+
+- Cam card = adapted `.cd` (border-left 2px accent, corner tick via `::before`).
+- Cam list row = adapted `.lst a` (hover translateX, accent flip).
+- Status chip = `.chip` recolored: green=online (<5 min), gold=stale (5–15 min), red=offline (>15 min).
+- Buttons = `.cta` style with cyan default / gold for destructive.
+
+**CSP**: the placeholder CSP from PR-S1 keeps `'unsafe-inline'` for styles only because raumdock's CSS isn't yet split. Web UI work tightens this by moving page-specific styles into the stylesheet and dropping `'unsafe-inline'`. `script-src 'self'` already disallows inline JS; htmx is self-hosted.
+
+*Decision: copy-port the theme now, extract to a shared `raumdock-ui` package only if a third consumer (beyond Website + CamHub) emerges.*
+
+### 17.3 Layout
+
+```
+internal/webui/
+  handlers.go              // page handlers
+  middleware_host.go       // app.* vs api.* host split
+  templates/
+    layout.templ           // header/footer chrome, nav, csrf+api-base meta
+    login.templ
+    dashboard.templ        // cam grid
+    cam_detail.templ       // capabilities, stream URLs, command panel
+    tokens.templ           // PAT minting + revoke
+    admin_enrollment.templ
+    admin_users.templ
+    admin_audit.templ
+    _components.templ      // chip, card, status_dot, csrf_meta partials
+static/
+  css/camhub.css           // raumdock theme port
+  js/camhub.js             // htmx config + csrf + refresh ticker
+  fonts/BebasNeue-Regular.ttf
+  img/                     // favicon, og image
+```
+
+`templ` generates `.go` files via `go generate ./...`; the generated `.go` is committed alongside `.templ` so `go build` stays single-step and the scratch image gets no Node toolchain.
+
+### 17.4 Routes (UI host)
+
+| Path | Role | Purpose |
+|---|---|---|
+| `GET /login` | public | Login form; POSTs cross-origin to `api./v1/auth/login` |
+| `GET /` | session | Fleet dashboard; redirects to `/login` if no cookie |
+| `GET /cams/{id}` | session | Cam detail: capabilities, stream URLs, command panel |
+| `GET /tokens` | session | Per-user PAT list + mint form (M2) |
+| `GET /admin/enrollment` | admin | Enrollment token generator (M1) |
+| `GET /admin/users` | admin | User CRUD, role changes (M4) |
+| `GET /admin/audit` | admin | Audit log viewer with filters (M3) |
+| `GET /static/*` | public | css / js / fonts / img |
+| `GET /healthz` | public | Already exists; served on both hosts |
+
+`/partials/...` endpoints back htmx polling (e.g. `hx-get="/partials/cam/{id}/card" hx-trigger="every 10s"`) and are subject to the same session middleware as their parent pages.
+
+### 17.5 Page sketches
+
+- **Login** — centered card on raumdock hero gradient, "RAUMDOCK · CAMHUB" wordmark, fields email + password, error chip on failure. No "register" link — bootstrap-admin only.
+- **Dashboard** — sticky header (`.hd` + `.nv`), section with `h1` "FLEET" + a count chip. Body is a `.cds`-style grid of cam cards. Each card shows status dot + name, capability summary (`Logitech C920 · 1080p30 · h264`), last-seen relative time, and inline `[view] [restart] [copy obs]`. Cards htmx-poll every 10 s.
+- **Cam detail** — status banner up top, two-column `.g`: left = capabilities table + stream URL block (each row with "Copy" + "Test"); right = command panel (radio of `restart_stream` / `set_bitrate` / `set_audio` / `get_logs`, submit posts to `api./v1/devices/{id}/commands`, response streams into a `.lst` with timestamps).
+- **Enrollment** — admin chip, "Generate token" button. New token shown once in a fixed-width readout with copy + 24 h TTL warning. Outstanding tokens listed below with revoke action.
+- **Tokens (PAT)** — table of issued PATs (id, scope, last_used). "New token" form with cam multi-select and capability checkboxes. Secret shown once.
+- **Audit** — server-rendered table, htmx pagination, filter by actor / action / cam.
+
+### 17.6 Milestones
+
+Web UI is a track parallel to the backend roadmap in §13. The naming `UI-Mn` disambiguates from backend `Milestone n`. Backend gates are called out per milestone.
+
+**UI-M0 — Shell + login (½ sprint, independent)**
+- templ pipeline + `go generate` wiring, host-aware middleware, `static/` mount.
+- Theme port: `static/css/camhub.css`, fonts, favicon.
+- `layout.templ`, `login.templ`, `/login` against the existing M0 auth API.
+- Silent-refresh ticker against `POST /v1/auth/refresh` (PR-S5).
+- *No backend dependency* — can land in parallel with PR-S6/S7.
+
+**UI-M1 — Fleet dashboard + cam detail (1 sprint)** — gated on backend Milestone 1
+- `dashboard.templ`, `cam_detail.templ`, polling partials.
+- Status dot logic (green/gold/red).
+- Command panel stub (no submit yet — the buttons exist, but POSTing is UI-M3).
+
+**UI-M2 — PAT minting + OBS URL UX (½ sprint)** — gated on backend Milestone 2
+- `tokens.templ`, "Copy OBS URL" buttons on cam detail.
+- Signed-URL variant per §6.
+- Per-user token list.
+
+**UI-M3 — Live commands + audit log (½ sprint)** — gated on backend Milestone 3
+- Submit + result streaming for the command catalog (§7.3).
+- `admin_audit.templ` with filters.
+
+**UI-M4 — Admin polish (½ sprint)** — gated on backend Milestone 4
+- User CRUD + role changes.
+- TOTP enrollment flow.
+- Rate-limit visibility (last failed logins per user, surfaced from the PR-S2 limiter).
+
+### 17.7 Open questions (UI-specific)
+
+1. **Logo glyph.** Reuse the CSS-only `.lg` mark from the website with a "CAMHUB" subtitle, or commission a dedicated CamHub glyph? *Recommendation: reuse with subtitle.*
+2. **Language.** raumdock.org is German; CamHub operator-facing strings would benefit from English (grep, error message portability). *Recommendation: EN-only for v1; defer i18n until UI-M4.*
+3. **Refresh ticker visibility.** Should the page surface "session expires in N min" anywhere, or stay silent? *Recommendation: silent; only show on background-refresh failure.*
+4. **Asset cache busting.** Inline build hash in `static/` URLs (matching the website's `?v=20260513-...` pattern) or rely on Caddy's `etag`/`cache-control`? *Recommendation: build-time hash in the URL — survives proxy caches.*
+
 ---
 
 *This plan is a starting point. Each milestone should land as a separate, reviewable PR; the API contract in § 8 is the public surface and changes to it after Milestone 1 require coordinated cam-side updates.*

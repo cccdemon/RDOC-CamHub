@@ -1,8 +1,11 @@
 # Build artifacts
 /bin/
 /dist/
-camhub
-camhub.exe
+# Anchor the binary patterns to the repo root so they don't shadow
+# cmd/camhub/. A bare `camhub` would match any path component named
+# camhub anywhere in the tree (incl. cmd/camhub/), which is wrong.
+/camhub
+/camhub.exe
 
 # Local dev state
 /data/

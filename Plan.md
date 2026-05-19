@@ -237,16 +237,24 @@ Rejecting alternatives explicitly:
 
 ## 12. Deployment
 
-Single host (Hetzner CX22 or similar) running:
+**Decided 2026-05-19**: CamHub runs in the existing public services LXC (`10.10.10.99` — same host as RDOC-WEBRTC and CC-Financial). Ingress goes through LXC 101's nginx SNI router, which already terminates DNS for the other `*.raumdock.org` subdomains.
 
 ```
-api.raumdock.org  →  Caddy  →  camhub (8080)
-app.raumdock.org  →  Caddy  →  camhub (8080, /ui/*)
+Internet
+  └─ DNS A: app.camhub.raumdock.org, api.camhub.raumdock.org → LXC 101 public IP
+       └─ LXC 101 nginx stream { } (ssl_preread on :443, SNI map)
+            └─ camhub_lxc → 10.10.10.99:8443
+                 └─ CamHub Caddy (DNS-01 via Cloudflare) on :8443
+                      └─ reverse_proxy → camhub:8080
 ```
 
-- Compose stack: `caddy`, `camhub`, optional `backup` sidecar.
-- Backups: nightly `sqlite3 .backup` → off-host (Hetzner Storage Box or S3).
-- Monitoring: a `/healthz` endpoint, a `/metrics` Prometheus endpoint (admin-token gated). UptimeKuma or Healthchecks.io ping every 1 min.
+- **Hostnames**: `app.camhub.raumdock.org` (UI) and `api.camhub.raumdock.org` (API + control). Both DNS records point at LXC 101.
+- **Why two hostnames**: keeps the htmx UI and the JSON/control plane on separate origins so a UI XSS can't trivially exfiltrate PATs by hitting the API on the same origin. The session cookie is scoped `Domain=camhub.raumdock.org` (PSL-safe) so login at either host works for both.
+- **Compose**: base [docker-compose.yml](docker-compose.yml) (dev) + [docker-compose.prod.yml](docker-compose.prod.yml) (override). RDOC-WEBRTC's Caddy on the same LXC is *untouched* — CamHub's own Caddy binds `:8443` only and never competes for `:80` / `:443`.
+- **ACME**: Cloudflare DNS-01 (token mounted as a Docker secret; an entrypoint shim bridges it to `CF_API_TOKEN`). No `:80` exposure needed.
+- **nginx-101 patch**: see [deploy/lxc101-nginx-camhub.conf](deploy/lxc101-nginx-camhub.conf) — two map entries + one upstream block. Reload, no restart.
+- Backups: nightly `pg_dump` → off-host. (Decision deferred to M4.)
+- Monitoring: `/healthz` endpoint, a `/metrics` Prometheus endpoint (admin-token gated). UptimeKuma or Healthchecks.io ping every 1 min.
 - Logs: stdout → Caddy/Docker → host journal. No log shipping in v1.
 
 ## 13. Roadmap

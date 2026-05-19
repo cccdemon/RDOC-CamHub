@@ -1,0 +1,59 @@
+# Production override for the public LXC (sibling to RDOC-WEBRTC).
+#
+# Compose usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Topology (see deploy/lxc101-nginx-camhub.conf):
+#   nginx (LXC 101) ── SNI ──> this LXC :8443 ── Caddy ──> camhub:8080
+#
+# Differences from base docker-compose.yml:
+#   - Caddy is custom-built with the cloudflare-dns plugin (deploy/caddy/Dockerfile).
+#   - Caddy binds :8443 only. Ports :80 / :443 stay owned by RDOC-WEBRTC's Caddy.
+#   - camhub no longer accepts the dev-insecure-cookie escape hatch.
+#   - Cookie domain spans both api. and app. subdomains.
+#   - CSRF Origin allow-list pinned to the UI host.
+
+services:
+  camhub:
+    environment:
+      CAMHUB_LISTEN: ":8080"
+      CAMHUB_DB_URL_FILE: /run/secrets/db_url
+      CAMHUB_SESSION_KEY_FILE: /run/secrets/session_key
+      CAMHUB_LOG_LEVEL: info
+
+      # Caddy is the only peer that can reach camhub on the compose network.
+      # Trust the Docker bridge ranges (Caddy's source IP lands in one of these).
+      CAMHUB_TRUSTED_PROXIES: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+
+      # Prod cookie posture — explicit, not "if r.TLS != nil".
+      CAMHUB_COOKIE_DOMAIN: "camhub.raumdock.org"
+      CAMHUB_ALLOWED_ORIGINS: "https://app.camhub.raumdock.org"
+    # Drop the dev escape hatch. Compose merges environment maps; an unset
+    # key in this override does *not* unset the key from the base file, so
+    # we force it off here.
+    # NOTE: when adding more dev-only env in base, mirror an explicit off
+    # value in this file.
+
+  caddy:
+    build:
+      context: ./deploy/caddy
+    image: rdoc-camhub-caddy:local
+    environment:
+      CF_API_TOKEN_FILE: /run/secrets/cf_api_token
+      # Caddy reads CF_API_TOKEN from env at startup; the cloudflare-dns
+      # plugin doesn't read *_FILE forms on its own, so we shim it via
+      # entrypoint. See deploy/caddy/entrypoint note in README.
+    secrets:
+      - cf_api_token
+    ports:
+      # Override base mapping. Only :8443 is exposed; nginx-101 forwards
+      # camhub.* SNI traffic to this LXC on 8443.
+      - "8443:8443"
+    volumes:
+      - ./deploy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+secrets:
+  cf_api_token:
+    file: ./secrets/cf_api_token

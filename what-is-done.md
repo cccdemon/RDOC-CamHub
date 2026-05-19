@@ -153,6 +153,24 @@ curl -s -i -c /tmp/c.txt -X POST http://localhost:8080/v1/auth/login \
 # → camhub_session=…; Path=/; HttpOnly; SameSite=Lax    (no Secure in dev)
 ```
 
+## Production deployment scaffolding (2026-05-19)
+
+Repo-side artifacts to deploy CamHub into the public services LXC (`10.10.10.99`, same host as RDOC-WEBRTC) behind LXC 101's nginx SNI router. **Not yet applied** — user runs the deploy.
+
+- [docker-compose.prod.yml](docker-compose.prod.yml) — compose override. Caddy binds `:8443` only (RDOC-WEBRTC's Caddy keeps `:443`). `CAMHUB_COOKIE_DOMAIN=camhub.raumdock.org`, `CAMHUB_ALLOWED_ORIGINS=https://app.camhub.raumdock.org`, dev-insecure-cookie escape hatch removed, Cloudflare API token mounted as Docker secret.
+- [deploy/Caddyfile.prod](deploy/Caddyfile.prod) — rewritten for `app.camhub.raumdock.org:8443` + `api.camhub.raumdock.org:8443`. `acme_dns cloudflare {env.CF_API_TOKEN}`, `auto_https disable_redirects` (no `:80`). Common headers (HSTS, nosniff, Referrer-Policy, CSP placeholder).
+- [deploy/caddy/Dockerfile](deploy/caddy/Dockerfile) — `caddy:builder` + `xcaddy build --with github.com/caddy-dns/cloudflare`, mirrors RDOC-WEBRTC's pattern.
+- [deploy/caddy/entrypoint.sh](deploy/caddy/entrypoint.sh) — bridges `CF_API_TOKEN_FILE` Docker secret → `CF_API_TOKEN` env var (caddy-dns/cloudflare doesn't read `*_FILE` itself).
+- [deploy/lxc101-nginx-camhub.conf](deploy/lxc101-nginx-camhub.conf) — patch instructions for `/etc/nginx/stream.d/minecraft.raumdock.org.conf` on LXC 101: two map entries + `upstream camhub_lxc { server 10.10.10.99:8443; }`. SNI-only, no TLS termination on the edge.
+- [Makefile](Makefile) — new `prod-up`, `prod-down`, `prod-build`, `prod-logs`, `secrets-check-prod` targets. `secrets-check-prod` refuses to bring up the stack until `secrets/cf_api_token` exists.
+- [README.md](README.md) — "Production deploy" section with one-time setup and smoke tests.
+- [Plan.md](Plan.md) §12 — rewritten to reflect the actual topology (LXC 101 SNI → public LXC `:8443` → CamHub Caddy → camhub:8080) instead of the original "single host with Caddy on 80/443" sketch.
+
+Open before applying:
+- Cloudflare API token (Zone:DNS:Edit on `raumdock.org`) needs to land in `secrets/cf_api_token` on the public LXC.
+- LXC 101 nginx patch + `systemctl reload nginx`.
+- Verify nothing else on `10.10.10.99` already binds `:8443`.
+
 ## What is not done (next up)
 
 ### M0.5 remainder

@@ -1,4 +1,5 @@
-.PHONY: build test lint run stop image migrate-up migrate-down secrets-init clean
+.PHONY: build test lint run stop image migrate-up migrate-down secrets-init clean \
+        prod-up prod-down prod-build prod-logs secrets-check-prod
 
 GO := go
 BIN := bin/camhub
@@ -41,3 +42,30 @@ secrets-init:
 
 clean:
 	rm -rf bin/
+
+# ----- Production (public LXC, sibling to RDOC-WEBRTC) --------------------
+# Compose base + prod override. See docker-compose.prod.yml and
+# deploy/lxc101-nginx-camhub.conf.
+
+COMPOSE_PROD := docker compose -f docker-compose.yml -f docker-compose.prod.yml
+
+prod-up: secrets-check-prod
+	$(COMPOSE_PROD) up -d --build
+
+prod-down:
+	$(COMPOSE_PROD) down
+
+prod-build:
+	$(COMPOSE_PROD) build
+
+prod-logs:
+	$(COMPOSE_PROD) logs -f --tail=200
+
+# Prod needs a Cloudflare API token in addition to the dev secrets. We never
+# generate this — it's a real credential. Just verify it exists.
+secrets-check-prod:
+	@test -f secrets/postgres_password || (echo "missing secrets/postgres_password — run 'make secrets-init'" && exit 1)
+	@test -f secrets/session_key       || (echo "missing secrets/session_key — run 'make secrets-init'" && exit 1)
+	@test -f secrets/db_url            || (echo "missing secrets/db_url — run 'make secrets-init'" && exit 1)
+	@test -f secrets/cf_api_token      || (echo "missing secrets/cf_api_token — write your Cloudflare API token (Zone:DNS:Edit on raumdock.org) into this file, then chmod 600" && exit 1)
+	@echo "prod secrets present"

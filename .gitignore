@@ -1,0 +1,23 @@
+# Build artifacts
+/bin/
+/dist/
+camhub
+camhub.exe
+
+# Local dev state
+/data/
+/secrets/
+.env
+.env.local
+*.local.yaml
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Go
+*.test
+*.out
+coverage.txt

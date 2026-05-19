@@ -55,9 +55,22 @@ All config via env vars; secrets via file paths (never inline).
 | Var | Default | Purpose |
 |---|---|---|
 | `CAMHUB_LISTEN` | `:8080` | HTTP listen address |
-| `CAMHUB_DB_URL` | _required_ | `postgres://user:pass@host:5432/camhub` |
-| `CAMHUB_SESSION_KEY_FILE` | `/run/secrets/session_key` | 32-byte key for signing session cookies |
+| `CAMHUB_DB_URL` / `CAMHUB_DB_URL_FILE` | _required_ | `postgres://user:pass@host:5432/camhub` |
+| `CAMHUB_SESSION_KEY_FILE` | _required_ | ≥32-byte secret. Currently loaded but unused (see Plan §16 PR-S5) |
 | `CAMHUB_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `CAMHUB_COOKIE_DOMAIN` | empty | Domain attribute on session/CSRF cookies. Leave empty for host-only cookies |
+| `CAMHUB_DEV_INSECURE_COOKIE` | unset | Set to `1` for local plain-HTTP dev. Disables the `Secure` cookie attribute. **Never set in production.** |
+| `CAMHUB_TRUSTED_PROXIES` | empty | Comma-separated CIDRs whose `X-Forwarded-For` / `X-Real-IP` are trusted. Empty → headers ignored, peer addr used. Example: `172.16.0.0/12,10.0.0.0/8` |
+| `CAMHUB_LOGIN_RATE_PER_IP` | `10` | Login attempts allowed per window per client IP. `0` disables the limiter |
+| `CAMHUB_LOGIN_RATE_WINDOW_SECS` | `60` | Rolling window for the login limiter, in seconds. `0` disables the limiter |
+
+### Trusted-proxy hint for Docker Compose
+
+When camhub runs behind Caddy in the bundled compose stack, the immediate peer
+is Caddy's container IP (typically inside `172.16.0.0/12`). Set
+`CAMHUB_TRUSTED_PROXIES=172.16.0.0/12` on the `camhub` service to honor
+Caddy's `X-Forwarded-For` and get real client IPs in logs, sessions, and the
+login rate limiter.
 
 ## License
 

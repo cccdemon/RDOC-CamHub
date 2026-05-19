@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: camhub
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: camhub
+    secrets:
+      - postgres_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U camhub -d camhub"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  camhub:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CAMHUB_LISTEN: ":8080"
+      CAMHUB_DB_URL_FILE: /run/secrets/db_url
+      CAMHUB_SESSION_KEY_FILE: /run/secrets/session_key
+      CAMHUB_LOG_LEVEL: info
+      # Caddy is the immediate peer. Trust Docker's default bridge ranges so
+      # X-Forwarded-For from Caddy is honored. Tighten in prod.
+      CAMHUB_TRUSTED_PROXIES: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+      # Local dev runs Caddy on plain HTTP. Flip this off when Caddy.prod.
+      CAMHUB_DEV_INSECURE_COOKIE: "1"
+    secrets:
+      - db_url
+      - session_key
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - camhub
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  db_url:
+    file: ./secrets/db_url
+  session_key:
+    file: ./secrets/session_key

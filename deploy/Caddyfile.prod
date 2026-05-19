@@ -1,0 +1,51 @@
+# Production Caddyfile for RDOC-CamHub.
+#
+# Mount over the dev Caddyfile in compose, e.g.:
+#   volumes:
+#     - ./deploy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
+#
+# Requirements:
+#   - DNS A/AAAA records for both hosts point at this Caddy.
+#   - Inbound TCP/80 and TCP/443 reachable from the public internet
+#     (HTTP-01 challenge) OR a Cloudflare DNS-01 setup if you swap the image
+#     for the cloudflare-dns build from RDOC-RaspiCam/tools.
+#   - camhub binds 127.0.0.1:8080 only — never expose it directly.
+
+{
+	email admin@raumdock.org
+}
+
+(common_headers) {
+	header {
+		# HSTS is asserted only on real HTTPS hostnames (Caddy enables it
+		# automatically below; this directive ensures the policy is the one
+		# we want).
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options    "nosniff"
+		Referrer-Policy           "strict-origin-when-cross-origin"
+		# CSP for the htmx UI — tightened in M0.5 follow-ups when the UI lands.
+		Content-Security-Policy   "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+		# Strip the upstream's Server header.
+		-Server
+	}
+}
+
+# API host (programmatic + control-plane).
+api.raumdock.org {
+	encode zstd gzip
+	import common_headers
+	reverse_proxy camhub:8080 {
+		header_up X-Forwarded-For   {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}
+
+# Web UI host.
+app.raumdock.org {
+	encode zstd gzip
+	import common_headers
+	reverse_proxy camhub:8080 {
+		header_up X-Forwarded-For   {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

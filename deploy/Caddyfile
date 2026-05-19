@@ -1,0 +1,28 @@
+# CamHub Caddyfile
+#
+# For local dev: `caddy` listens on :80/:443 and proxies to the camhub container.
+# For production: replace the placeholders with your real hostnames and let
+# Caddy obtain certificates automatically (HTTP-01 by default, or DNS-01 via
+# the Cloudflare plugin if you swap the image — see RDOC-RaspiCam/tools/caddy-cloudflare.Dockerfile).
+
+{
+	# email admin@example.org  # uncomment for production ACME
+}
+
+# Local dev: plain HTTP on :80
+:80 {
+	encode zstd gzip
+	reverse_proxy camhub:8080
+}
+
+# Production placeholders — uncomment and edit when deploying.
+#
+# api.raumdock.org {
+# 	encode zstd gzip
+# 	reverse_proxy camhub:8080
+# }
+#
+# app.raumdock.org {
+# 	encode zstd gzip
+# 	reverse_proxy camhub:8080
+# }

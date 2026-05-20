@@ -33,11 +33,20 @@ services:
       CAMHUB_TRUSTED_PROXIES: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
       # Local dev runs Caddy on plain HTTP. Flip this off when Caddy.prod.
       CAMHUB_DEV_INSECURE_COOKIE: "1"
+
+      # Device-side wiring (M1). The JWT ring file path points at a
+      # mounted secret; ParentDomain is required for FQDN composition.
+      # Cloudflare creds are intentionally unset in dev so /v1/devices/*
+      # short-circuits with 503 — no test cam should hit real DNS from
+      # a developer laptop.
+      CAMHUB_DEVICE_JWT_RING_FILE: /run/secrets/device_jwt_ring
+      CAMHUB_PARENT_DOMAIN: raumdock.org
     secrets:
       # File-based secrets in non-swarm Compose ignore uid/gid/mode (only
       # honored in Swarm). camhub runs as uid 65532; the host file must
       # be readable by that uid. `make secrets-init` chowns it accordingly.
       - db_url
+      - device_jwt_ring
     ports:
       - "127.0.0.1:8080:8080"
 
@@ -64,3 +73,5 @@ secrets:
     file: ./secrets/postgres_password
   db_url:
     file: ./secrets/db_url
+  device_jwt_ring:
+    file: ./secrets/device_jwt_ring.json

@@ -11,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/raumdock/rdoc-camhub/internal/cloudflare"
 	"github.com/raumdock/rdoc-camhub/internal/config"
 	"github.com/raumdock/rdoc-camhub/internal/db"
+	"github.com/raumdock/rdoc-camhub/internal/devicejwt"
 	"github.com/raumdock/rdoc-camhub/internal/httpapi"
 	"github.com/raumdock/rdoc-camhub/internal/webui"
 )
@@ -33,6 +35,10 @@ func main() {
 		exitOnErr(runMigrate(rest))
 	case "bootstrap-admin":
 		exitOnErr(runBootstrapAdmin(rest))
+	case "devicejwt":
+		exitOnErr(runDeviceJWT(rest))
+	case "enrollment-token":
+		exitOnErr(runEnrollmentToken(rest))
 	case "version", "-v", "--version":
 		fmt.Println(version)
 	case "help", "-h", "--help":
@@ -90,13 +96,49 @@ func runServe(args []string) error {
 		return fmt.Errorf("webui init: %w", err)
 	}
 
+	// Device-JWT ring. Optional pre-M1 rollout: if the file isn't
+	// configured we leave the signer nil and the register handler
+	// fails closed at request time. Once cams are enrolling, the
+	// secrets-init Makefile target writes the file and this becomes
+	// non-optional.
+	var deviceJWT httpapi.DeviceJWTSigner
+	if cfg.DeviceJWTRingFile != "" {
+		ring, err := devicejwt.LoadRingFile(cfg.DeviceJWTRingFile)
+		if err != nil {
+			return fmt.Errorf("device jwt ring: %w", err)
+		}
+		deviceJWT = ring
+	}
+
+	// Cloudflare client. Same fail-closed posture: nil client = device
+	// endpoints reject. Production must set both CF_API_TOKEN and
+	// CF_ZONE_ID; setting one without the other is a config error.
+	var cfClient httpapi.DNSClient
+	switch {
+	case cfg.CFAPIToken != "" && cfg.CFZoneID != "":
+		c, err := cloudflare.New(cloudflare.Config{
+			APIToken: cfg.CFAPIToken,
+			ZoneID:   cfg.CFZoneID,
+		})
+		if err != nil {
+			return fmt.Errorf("cloudflare client: %w", err)
+		}
+		cfClient = c
+	case cfg.CFAPIToken != "" || cfg.CFZoneID != "":
+		return fmt.Errorf("cloudflare: set both CAMHUB_CF_API_TOKEN(_FILE) and CAMHUB_CF_ZONE_ID, or neither")
+	}
+
 	srv := httpapi.New(logger, pool, version, httpapi.Options{
-		Cookies:        cookies,
-		TrustedProxies: cfg.TrustedProxies,
-		AllowedOrigins: cfg.AllowedOrigins,
-		AppHost:        cfg.AppHost,
-		APIHost:        cfg.APIHost,
-		WebUI:          uiSrv,
+		Cookies:            cookies,
+		TrustedProxies:     cfg.TrustedProxies,
+		AllowedOrigins:     cfg.AllowedOrigins,
+		AppHost:            cfg.AppHost,
+		APIHost:            cfg.APIHost,
+		WebUI:              uiSrv,
+		DeviceJWT:          deviceJWT,
+		CFClient:           cfClient,
+		ParentDomain:       cfg.ParentDomain,
+		HubCertFingerprint: cfg.HubCertFingerprint,
 	})
 	srv.LoginRateLimiter = httpapi.LoginRateLimiter(httpapi.RateLimitConfig{
 		PerIP:      cfg.LoginRateLimitPerIP,
@@ -207,6 +249,9 @@ Usage:
   camhub migrate up|down                  apply or roll back one migration
   camhub bootstrap-admin --email E --password P
                                           create the initial admin user
+  camhub devicejwt init --out PATH        generate the device-JWT signing ring
+  camhub enrollment-token [--ttl --note --actor-email]
+                                          mint a one-shot device enrollment token
   camhub version                          print the build version
   camhub help                              print this message
 

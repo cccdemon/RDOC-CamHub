@@ -44,9 +44,12 @@ secrets-init:
 	@mkdir -p secrets
 	@test -f secrets/postgres_password || (head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'         > secrets/postgres_password && echo "wrote secrets/postgres_password")
 	@test -f secrets/db_url            || (printf 'postgres://camhub:%s@postgres:5432/camhub?sslmode=disable' "$$(cat secrets/postgres_password)" > secrets/db_url && echo "wrote secrets/db_url")
+	@# Device-JWT signing ring (M1.B). Generated via the camhub binary
+	@# because ed25519 keypair generation isn't a clean bash one-liner.
+	@test -f secrets/device_jwt_ring.json || ($(GO) run ./cmd/camhub devicejwt init --out secrets/device_jwt_ring.json && echo "wrote secrets/device_jwt_ring.json")
 	@chmod 600 secrets/*
-	@chown 65532:65532 secrets/db_url 2>/dev/null && echo "chowned db_url to 65532:65532 (camhub uid)" || \
-	    echo "WARN: chown to 65532 failed — run 'sudo chown 65532:65532 secrets/db_url' or expect EACCES inside the camhub container"
+	@chown 65532:65532 secrets/db_url secrets/device_jwt_ring.json 2>/dev/null && echo "chowned db_url + device_jwt_ring.json to 65532:65532 (camhub uid)" || \
+	    echo "WARN: chown to 65532 failed — run 'sudo chown 65532:65532 secrets/db_url secrets/device_jwt_ring.json' or expect EACCES inside the camhub container"
 
 clean:
 	rm -rf bin/
@@ -72,9 +75,11 @@ prod-logs:
 # Prod needs a Cloudflare API token in addition to the dev secrets. We never
 # generate this — it's a real credential. Just verify it exists.
 secrets-check-prod:
-	@test -f secrets/postgres_password || (echo "missing secrets/postgres_password — run 'make secrets-init'" && exit 1)
-	@test -f secrets/db_url            || (echo "missing secrets/db_url — run 'make secrets-init'" && exit 1)
-	@test -f secrets/cf_api_token      || (echo "missing secrets/cf_api_token — write your Cloudflare API token (Zone:DNS:Edit on raumdock.org) into this file, then chmod 600" && exit 1)
-	@# camhub runs as uid 65532; the secret it reads must be owned by that uid.
-	@stat -c '%u' secrets/db_url | grep -q '^65532$$' || (echo "secrets/db_url is not owned by uid 65532 — running: chown 65532:65532 secrets/db_url" && chown 65532:65532 secrets/db_url)
+	@test -f secrets/postgres_password    || (echo "missing secrets/postgres_password — run 'make secrets-init'" && exit 1)
+	@test -f secrets/db_url               || (echo "missing secrets/db_url — run 'make secrets-init'" && exit 1)
+	@test -f secrets/device_jwt_ring.json || (echo "missing secrets/device_jwt_ring.json — run 'make secrets-init'" && exit 1)
+	@test -f secrets/cf_api_token         || (echo "missing secrets/cf_api_token — write your Cloudflare API token (Zone:DNS:Edit on raumdock.org) into this file, then chmod 600" && exit 1)
+	@# camhub runs as uid 65532; the secrets it reads must be owned by that uid.
+	@stat -c '%u' secrets/db_url               | grep -q '^65532$$' || (echo "secrets/db_url not owned by uid 65532 — running: chown 65532:65532 secrets/db_url" && chown 65532:65532 secrets/db_url)
+	@stat -c '%u' secrets/device_jwt_ring.json | grep -q '^65532$$' || (echo "secrets/device_jwt_ring.json not owned by uid 65532 — running: chown" && chown 65532:65532 secrets/device_jwt_ring.json)
 	@echo "prod secrets present"

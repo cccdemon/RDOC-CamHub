@@ -34,6 +34,20 @@ services:
       CAMHUB_APP_HOST: "app.camhub.raumdock.org"
       CAMHUB_API_HOST: "api.camhub.raumdock.org"
       CAMHUB_API_BASE: "https://api.camhub.raumdock.org"
+
+      # Cloudflare credentials for device DNS (Plan §3). Zone ID is the
+      # public id of raumdock.org's zone — set this to the actual value
+      # from the Cloudflare dashboard. The token comes from a file
+      # secret to keep it off env-var listings (Plan §10).
+      CAMHUB_CF_API_TOKEN_FILE: /run/secrets/cf_api_token
+      CAMHUB_CF_ZONE_ID: "REPLACE_WITH_RAUMDOCK_ZONE_ID"
+      # Hub cert fingerprint (TOFU pin target on the cam). Set after
+      # the first Caddy cert issuance; empty leaves cams unpinned.
+      # CAMHUB_HUB_CERT_FINGERPRINT: ""
+    secrets:
+      - db_url
+      - device_jwt_ring
+      - cf_api_token
     # Drop the dev escape hatch. Compose merges environment maps; an unset
     # key in this override does *not* unset the key from the base file, so
     # we force it off here.
@@ -65,3 +79,7 @@ services:
 secrets:
   cf_api_token:
     file: ./secrets/cf_api_token
+  # device_jwt_ring is declared in the base compose file; we re-declare
+  # here as a no-op since prod uses the same on-disk path.
+  device_jwt_ring:
+    file: ./secrets/device_jwt_ring.json

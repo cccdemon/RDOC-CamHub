@@ -45,6 +45,20 @@ type Config struct {
 	AppHost string
 	APIHost string
 	APIBase string
+
+	// Device-side wiring (Plan §3 + §4). All four required for the M1
+	// register/heartbeat endpoints.
+	//
+	//   ParentDomain         — DNS zone cams enrol under (e.g. raumdock.org).
+	//   CFAPIToken           — Cloudflare API token, Zone:DNS:Edit scope.
+	//   CFZoneID             — the zone id ParentDomain resolves to.
+	//   DeviceJWTRingFile    — secrets/device_jwt_ring.json path.
+	//   HubCertFingerprint   — SHA-256 fingerprint cams pin (TOFU); optional.
+	ParentDomain       string
+	CFAPIToken         string
+	CFZoneID           string
+	DeviceJWTRingFile  string
+	HubCertFingerprint string
 }
 
 func Load() (*Config, error) {
@@ -96,6 +110,27 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("db url: %w", err)
 	}
 	c.DBURL = dbURL
+
+	// Device-side config. Optional in dev so `go run ./cmd/camhub serve`
+	// works pre-M1; the device endpoints fail closed at request time
+	// when these are unset, which is the right behaviour pre-rollout.
+	c.ParentDomain = strings.TrimSpace(os.Getenv("CAMHUB_PARENT_DOMAIN"))
+	c.CFZoneID = strings.TrimSpace(os.Getenv("CAMHUB_CF_ZONE_ID"))
+	c.DeviceJWTRingFile = strings.TrimSpace(os.Getenv("CAMHUB_DEVICE_JWT_RING_FILE"))
+	c.HubCertFingerprint = strings.TrimSpace(os.Getenv("CAMHUB_HUB_CERT_FINGERPRINT"))
+
+	// CF token follows the same FILE-or-inline pattern as DB URL.
+	// Optional: empty token disables Cloudflare (dev/local). Handler
+	// startup-checks the combination so production never half-configures.
+	if path := os.Getenv("CAMHUB_CF_API_TOKEN_FILE"); path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read CAMHUB_CF_API_TOKEN_FILE=%q: %w", path, err)
+		}
+		c.CFAPIToken = strings.TrimRight(string(b), "\r\n")
+	} else if v := os.Getenv("CAMHUB_CF_API_TOKEN"); v != "" {
+		c.CFAPIToken = v
+	}
 
 	return c, nil
 }

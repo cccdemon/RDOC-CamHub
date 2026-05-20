@@ -37,14 +37,31 @@ type SessionWriter interface {
 }
 
 type Server struct {
-	Logger         *slog.Logger
-	Pool           *pgxpool.Pool
-	Users          UserLookup
-	Sessions       SessionWriter
-	Version        string
-	Cookies        SessionCookieConfig
-	TrustedProxies []netip.Prefix
-	AllowedOrigins []string
+	Logger           *slog.Logger
+	Pool             *pgxpool.Pool
+	Users            UserLookup
+	Sessions         SessionWriter
+	EnrollmentTokens EnrollmentTokenWriter
+	Devices          DeviceWriter
+	DNSRecords       DNSRecordWriter
+	DeviceJWT        DeviceJWTSigner
+	CFClient         DNSClient
+	Version          string
+	Cookies          SessionCookieConfig
+	TrustedProxies   []netip.Prefix
+	AllowedOrigins   []string
+
+	// ParentDomain is the zone under which cam subdomains are created
+	// (e.g. "raumdock.org"). Required for device-register to compose
+	// FQDNs.
+	ParentDomain string
+
+	// HubCertFingerprint is the SHA-256 fingerprint of the hub's TLS
+	// cert, returned in the register response so the cam can pin it
+	// (Plan §4.1, TOFU). Empty disables pinning — cams will skip
+	// fingerprint verification, which is acceptable for dev but
+	// SHOULD be set in prod.
+	HubCertFingerprint string
 
 	// Two-origin deployment shape (Plan §17.1). Both empty = dev:
 	// the UI routes are mounted on the same mux as the API, browseable
@@ -74,21 +91,37 @@ type Options struct {
 	// WebUI is the configured UI server (templates loaded). Nil = no UI
 	// served; the JSON API surface is the entire mux.
 	WebUI *webui.Server
+
+	// Device-side dependencies (Plan §4). All four are required for
+	// the M1 register/heartbeat endpoints; main.go fails fast if any
+	// is missing. ParentDomain and HubCertFingerprint are plumbed
+	// through here too because they live on Server.
+	DeviceJWT          DeviceJWTSigner
+	CFClient           DNSClient
+	ParentDomain       string
+	HubCertFingerprint string
 }
 
 func New(logger *slog.Logger, pool *pgxpool.Pool, version string, opts Options) *Server {
 	return &Server{
-		Logger:         logger,
-		Pool:           pool,
-		Users:          db.NewUserStore(pool),
-		Sessions:       db.NewSessionStore(pool),
-		Version:        version,
-		Cookies:        opts.Cookies,
-		TrustedProxies: opts.TrustedProxies,
-		AllowedOrigins: opts.AllowedOrigins,
-		AppHost:        opts.AppHost,
-		APIHost:        opts.APIHost,
-		WebUI:          opts.WebUI,
+		Logger:             logger,
+		Pool:               pool,
+		Users:              db.NewUserStore(pool),
+		Sessions:           db.NewSessionStore(pool),
+		EnrollmentTokens:   db.NewEnrollmentTokenStore(pool),
+		Devices:            db.NewDeviceStore(pool),
+		DNSRecords:         db.NewDNSRecordStore(pool),
+		DeviceJWT:          opts.DeviceJWT,
+		CFClient:           opts.CFClient,
+		Version:            version,
+		Cookies:            opts.Cookies,
+		TrustedProxies:     opts.TrustedProxies,
+		AllowedOrigins:     opts.AllowedOrigins,
+		AppHost:            opts.AppHost,
+		APIHost:            opts.APIHost,
+		WebUI:              opts.WebUI,
+		ParentDomain:       opts.ParentDomain,
+		HubCertFingerprint: opts.HubCertFingerprint,
 	}
 }
 
@@ -158,6 +191,11 @@ func (s *Server) apiRouter() *chi.Mux {
 			// its purpose (renewing an access-expired session).
 			r.Post("/refresh", s.refresh)
 		})
+
+		// Device-side endpoints. /register authenticates via Bearer
+		// enrollment token (in-handler), so the chi-level group is
+		// public.
+		r.Post("/v1/devices/register", s.registerDevice)
 	})
 
 	// Authenticated routes — any logged-in user (viewer/operator/admin).
@@ -170,14 +208,15 @@ func (s *Server) apiRouter() *chi.Mux {
 		r.Get("/v1/auth/me", s.me)
 	})
 
-	// Admin routes — declared now so future endpoints land in the right
-	// group. Empty in PR-S3; CSRF middleware pre-wired so M1 admin POSTs
-	// inherit it automatically.
+	// Admin routes. CSRF + admin role pre-wired since PR-S3; new admin
+	// endpoints land in this group and inherit it automatically.
 	r.Group(func(r chi.Router) {
 		r.Use(s.RequireSession)
 		r.Use(RequireRole(db.RoleAdmin))
 		r.Use(s.RequireCSRF)
-		// (no admin endpoints yet)
+
+		// Plan §4.1, M1.D — one-shot device enrollment tokens.
+		r.Post("/v1/admin/enrollment-tokens", s.mintEnrollmentToken)
 	})
 
 	return r

@@ -1,0 +1,46 @@
+{{define "layout.html"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="/static/css/camhub.css">
+  <meta name="api-base" content="{{.APIBase}}">
+  {{- if .CSRFMeta }}
+  <meta name="csrf" content="{{.CSRFMeta}}">
+  {{- end }}
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <header class="hd">
+    <div class="ctr nv">
+      <a class="br" href="/">
+        <span class="lg" aria-hidden="true"></span>
+        <span>RAUMDOCK</span>
+        <span class="br-sub">· CAMHUB</span>
+      </a>
+      <nav class="mn">
+        {{- if .User }}
+        <a href="/">Fleet</a>
+        <a href="/tokens">Tokens</a>
+        <a href="/logout" class="danger" data-action="logout">Logout</a>
+        {{- end }}
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    {{template "content" .}}
+  </main>
+
+  <footer class="ftr">
+    <div class="ctr ftr-i">
+      <span>camhub · {{.Version}}</span>
+      <span class="muted">raumdock.org</span>
+    </div>
+  </footer>
+
+  <script src="/static/js/camhub.js" defer></script>
+</body>
+</html>
+{{end}}

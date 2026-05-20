@@ -27,6 +27,13 @@ services:
       # Prod cookie posture — explicit, not "if r.TLS != nil".
       CAMHUB_COOKIE_DOMAIN: "camhub.raumdock.org"
       CAMHUB_ALLOWED_ORIGINS: "https://app.camhub.raumdock.org"
+
+      # Plan §17.1 two-origin split. AppHost serves HTML + /static;
+      # APIHost serves the JSON API. APIBase is the absolute origin the
+      # UI's JS uses for cross-origin fetches.
+      CAMHUB_APP_HOST: "app.camhub.raumdock.org"
+      CAMHUB_API_HOST: "api.camhub.raumdock.org"
+      CAMHUB_API_BASE: "https://api.camhub.raumdock.org"
     # Drop the dev escape hatch. Compose merges environment maps; an unset
     # key in this override does *not* unset the key from the base file, so
     # we force it off here.

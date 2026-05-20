@@ -34,6 +34,17 @@ type Config struct {
 	// Empty list => Origin/Referer check is skipped; the double-submit
 	// token alone gates the request. Set in production.
 	AllowedOrigins []string
+
+	// AppHost / APIHost split the JSON API surface from the HTML UI
+	// surface across two hostnames on the same listener (Plan §17.1).
+	// Both empty = dev/test (single mux). Setting only one is a config
+	// error and aborts startup.
+	//
+	// APIBase is the absolute origin (e.g. "https://api.camhub.raumdock.org")
+	// the UI's JS uses for cross-origin fetches. Empty = same-origin.
+	AppHost string
+	APIHost string
+	APIBase string
 }
 
 func Load() (*Config, error) {
@@ -71,6 +82,13 @@ func Load() (*Config, error) {
 
 	if raw := os.Getenv("CAMHUB_ALLOWED_ORIGINS"); raw != "" {
 		c.AllowedOrigins = parseCommaList(raw)
+	}
+
+	c.AppHost = strings.TrimSpace(os.Getenv("CAMHUB_APP_HOST"))
+	c.APIHost = strings.TrimSpace(os.Getenv("CAMHUB_API_HOST"))
+	c.APIBase = strings.TrimSpace(os.Getenv("CAMHUB_API_BASE"))
+	if (c.AppHost == "") != (c.APIHost == "") {
+		return nil, fmt.Errorf("host split: CAMHUB_APP_HOST and CAMHUB_API_HOST must both be set or both empty")
 	}
 
 	dbURL, err := readSecret("CAMHUB_DB_URL", "CAMHUB_DB_URL_FILE")

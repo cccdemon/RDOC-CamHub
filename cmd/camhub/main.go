@@ -14,6 +14,7 @@ import (
 	"github.com/raumdock/rdoc-camhub/internal/config"
 	"github.com/raumdock/rdoc-camhub/internal/db"
 	"github.com/raumdock/rdoc-camhub/internal/httpapi"
+	"github.com/raumdock/rdoc-camhub/internal/webui"
 )
 
 const version = "0.1.0-m0.5"
@@ -84,10 +85,18 @@ func runServe(args []string) error {
 		Domain: cfg.CookieDomain,
 	}
 
+	uiSrv, err := webui.New(logger, cfg.APIBase, version)
+	if err != nil {
+		return fmt.Errorf("webui init: %w", err)
+	}
+
 	srv := httpapi.New(logger, pool, version, httpapi.Options{
 		Cookies:        cookies,
 		TrustedProxies: cfg.TrustedProxies,
 		AllowedOrigins: cfg.AllowedOrigins,
+		AppHost:        cfg.AppHost,
+		APIHost:        cfg.APIHost,
+		WebUI:          uiSrv,
 	})
 	srv.LoginRateLimiter = httpapi.LoginRateLimiter(httpapi.RateLimitConfig{
 		PerIP:      cfg.LoginRateLimitPerIP,
@@ -103,6 +112,9 @@ func runServe(args []string) error {
 		"allowed_origins", len(cfg.AllowedOrigins),
 		"login_rate_per_ip", cfg.LoginRateLimitPerIP,
 		"login_rate_window_secs", cfg.LoginRateLimitWindowSecs,
+		"app_host", cfg.AppHost,
+		"api_host", cfg.APIHost,
+		"api_base", cfg.APIBase,
 	)
 
 	// Background session purge (PR-S5). RequireSession enforces expires_at

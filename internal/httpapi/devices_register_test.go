@@ -109,12 +109,16 @@ func (s *stubDNSRecords) Get(_ context.Context, _ string, _ db.DNSRecordType) (*
 
 // stubSigner satisfies DeviceJWTSigner with a deterministic kid and a
 // canned token string (so tests can assert on it without re-verifying
-// real Ed25519 signatures).
+// real Ed25519 signatures). Verify is keyed by exact token-string match
+// against verifyMap so heartbeat tests can inject "this token resolves
+// to these claims".
 type stubSigner struct {
-	kid    string
-	token  string
-	err    error
-	lastCl devicejwt.Claims
+	kid       string
+	token     string
+	err       error
+	lastCl    devicejwt.Claims
+	verifyMap map[string]*devicejwt.Claims
+	verifyErr error
 }
 
 func (s *stubSigner) Sign(c devicejwt.Claims) (string, error) {
@@ -124,6 +128,15 @@ func (s *stubSigner) Sign(c devicejwt.Claims) (string, error) {
 	}
 	return s.token, nil
 }
+func (s *stubSigner) Verify(tok string) (*devicejwt.Claims, error) {
+	if s.verifyErr != nil {
+		return nil, s.verifyErr
+	}
+	if c, ok := s.verifyMap[tok]; ok {
+		return c, nil
+	}
+	return nil, devicejwt.ErrInvalidToken
+}
 func (s *stubSigner) SigningKID() string { return s.kid }
 
 // stubCF satisfies cloudflare.DNSClient. Tracks call ordering so tests
@@ -132,6 +145,7 @@ type stubCF struct {
 	createErrA    error // returned on the first CreateRecord (A) call
 	createErrAAAA error // returned on the second CreateRecord (AAAA) call
 	createIdx     int
+	updateErr     error // returned on every UpdateRecord call
 
 	created []recordCall
 	updated []recordCall
@@ -164,6 +178,9 @@ func (s *stubCF) CreateRecord(_ context.Context, fqdn string, rt cloudflare.Reco
 }
 
 func (s *stubCF) UpdateRecord(_ context.Context, recordID, fqdn string, rt cloudflare.RecordType, value string) error {
+	if s.updateErr != nil {
+		return s.updateErr
+	}
 	s.updated = append(s.updated, recordCall{FQDN: fqdn, Type: rt, Value: value, RecordID: recordID})
 	return nil
 }

@@ -188,6 +188,43 @@ func runServe(args []string) error {
 		}
 	}()
 
+	// Device status sweep (Plan §4.2). Walks the devices table every
+	// 60 s and flips rows: online → stale (last_seen > 5 min) →
+	// offline (last_seen > 15 min). The heartbeat handler sets
+	// status='online'; this sweep is the only path to stale/offline.
+	//
+	// Resilient to missed cycles: each pass uses absolute cutoffs
+	// (now - 5m, now - 15m), so a long pause just produces a bigger
+	// batch on the next tick rather than losing transitions.
+	go func() {
+		devs := db.NewDeviceStore(pool)
+		const (
+			staleAfter   = 5 * time.Minute
+			offlineAfter = 15 * time.Minute
+			tick         = 60 * time.Second
+		)
+		runSweep := func() {
+			stale, offline, err := devs.MarkStale(ctx, staleAfter, offlineAfter)
+			switch {
+			case err != nil:
+				logger.Warn("device status sweep failed", "err", err)
+			case stale > 0 || offline > 0:
+				logger.Info("device status sweep", "stale", stale, "offline", offline)
+			}
+		}
+		runSweep()
+		t := time.NewTicker(tick)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				runSweep()
+			}
+		}
+	}()
+
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Router(),

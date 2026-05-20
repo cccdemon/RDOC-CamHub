@@ -82,4 +82,6 @@ secrets-check-prod:
 	@# camhub runs as uid 65532; the secrets it reads must be owned by that uid.
 	@stat -c '%u' secrets/db_url               | grep -q '^65532$$' || (echo "secrets/db_url not owned by uid 65532 — running: chown 65532:65532 secrets/db_url" && chown 65532:65532 secrets/db_url)
 	@stat -c '%u' secrets/device_jwt_ring.json | grep -q '^65532$$' || (echo "secrets/device_jwt_ring.json not owned by uid 65532 — running: chown" && chown 65532:65532 secrets/device_jwt_ring.json)
+	@stat -c '%u' secrets/cf_api_token         | grep -q '^65532$$' || (echo "secrets/cf_api_token not owned by uid 65532 — running: chown" && chown 65532:65532 secrets/cf_api_token)
+	@chmod 600 secrets/db_url secrets/device_jwt_ring.json secrets/cf_api_token
 	@echo "prod secrets present"

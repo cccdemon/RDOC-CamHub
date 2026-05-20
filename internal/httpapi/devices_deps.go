@@ -32,14 +32,20 @@ type DNSRecordWriter interface {
 	Get(ctx context.Context, deviceID string, t db.DNSRecordType) (*db.DNSRecord, error)
 }
 
-// DeviceJWTSigner is what we need from the device-JWT ring.
-// *devicejwt.Ring satisfies it.
+// DeviceJWTSigner is what we need from the device-JWT ring. Despite
+// the "Signer" name it also Verifies — the cam-side endpoints need to
+// validate inbound device JWTs. *devicejwt.Ring satisfies both halves.
 //
 // SigningKID returns the kid the ring will use for the next Sign call;
 // we persist it on the device row so the retirement-window code in M4
 // can target devices still bound to an old kid.
+//
+// Verify collapses every failure into devicejwt.ErrInvalidToken so the
+// heartbeat handler can return a single 401 without leaking which
+// check failed.
 type DeviceJWTSigner interface {
 	Sign(c devicejwt.Claims) (string, error)
+	Verify(token string) (*devicejwt.Claims, error)
 	SigningKID() string
 }
 

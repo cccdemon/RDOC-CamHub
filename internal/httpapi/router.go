@@ -192,10 +192,12 @@ func (s *Server) apiRouter() *chi.Mux {
 			r.Post("/refresh", s.refresh)
 		})
 
-		// Device-side endpoints. /register authenticates via Bearer
-		// enrollment token (in-handler), so the chi-level group is
+		// Device-side endpoints. Both authenticate via Bearer tokens
+		// in the handler — /register uses the enrollment token,
+		// /heartbeat uses the device JWT — so the chi-level group is
 		// public.
 		r.Post("/v1/devices/register", s.registerDevice)
+		r.Post("/v1/devices/heartbeat", s.heartbeatDevice)
 	})
 
 	// Authenticated routes — any logged-in user (viewer/operator/admin).
